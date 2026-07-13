@@ -146,59 +146,85 @@ void MainWindow::buildUi() {
     auto* filterGroup = new QGroupBox("Filters");
     auto* grid = new QGridLayout(filterGroup);
 
+    limiterEnable_ = new QCheckBox("Limiter (prevent clipping)");
+    limiterCeilingSlider_ = new QSlider(Qt::Horizontal);
+    limiterCeilingSlider_->setRange(-12, 0);
+    limiterCeilingSlider_->setValue(-1);
+    limiterCeilingValueLabel_ = new QLabel("-1 dB");
+    grid->addWidget(limiterEnable_, 0, 0);
+    grid->addWidget(limiterCeilingSlider_, 0, 1);
+    grid->addWidget(limiterCeilingValueLabel_, 0, 2);
+
     gainEnable_ = new QCheckBox("Gain");
     gainSlider_ = new QSlider(Qt::Horizontal);
     gainSlider_->setRange(-24, 24);
     gainSlider_->setValue(0);
     gainValueLabel_ = new QLabel("0 dB");
-    grid->addWidget(gainEnable_, 0, 0);
-    grid->addWidget(gainSlider_, 0, 1);
-    grid->addWidget(gainValueLabel_, 0, 2);
+    grid->addWidget(gainEnable_, 1, 0);
+    grid->addWidget(gainSlider_, 1, 1);
+    grid->addWidget(gainValueLabel_, 1, 2);
 
     highPassEnable_ = new QCheckBox("High-pass");
     highPassSlider_ = new QSlider(Qt::Horizontal);
     highPassSlider_->setRange(20, 2000);
     highPassSlider_->setValue(100);
     highPassValueLabel_ = new QLabel("100 Hz");
-    grid->addWidget(highPassEnable_, 1, 0);
-    grid->addWidget(highPassSlider_, 1, 1);
-    grid->addWidget(highPassValueLabel_, 1, 2);
+    grid->addWidget(highPassEnable_, 2, 0);
+    grid->addWidget(highPassSlider_, 2, 1);
+    grid->addWidget(highPassValueLabel_, 2, 2);
 
     lowPassEnable_ = new QCheckBox("Low-pass");
     lowPassSlider_ = new QSlider(Qt::Horizontal);
     lowPassSlider_->setRange(200, 20000);
     lowPassSlider_->setValue(8000);
     lowPassValueLabel_ = new QLabel("8000 Hz");
-    grid->addWidget(lowPassEnable_, 2, 0);
-    grid->addWidget(lowPassSlider_, 2, 1);
-    grid->addWidget(lowPassValueLabel_, 2, 2);
+    grid->addWidget(lowPassEnable_, 3, 0);
+    grid->addWidget(lowPassSlider_, 3, 1);
+    grid->addWidget(lowPassValueLabel_, 3, 2);
 
     noiseGateEnable_ = new QCheckBox("Noise gate");
     noiseGateSlider_ = new QSlider(Qt::Horizontal);
     noiseGateSlider_->setRange(-80, 0);
     noiseGateSlider_->setValue(-40);
     noiseGateValueLabel_ = new QLabel("-40 dB");
-    grid->addWidget(noiseGateEnable_, 3, 0);
-    grid->addWidget(noiseGateSlider_, 3, 1);
-    grid->addWidget(noiseGateValueLabel_, 3, 2);
+    grid->addWidget(noiseGateEnable_, 4, 0);
+    grid->addWidget(noiseGateSlider_, 4, 1);
+    grid->addWidget(noiseGateValueLabel_, 4, 2);
 
     noiseGateAttackSlider_ = new QSlider(Qt::Horizontal);
     noiseGateAttackSlider_->setRange(1, 200);
     noiseGateAttackSlider_->setValue(5);
     noiseGateAttackValueLabel_ = new QLabel("5 ms");
-    grid->addWidget(new QLabel("  Attack"), 4, 0);
-    grid->addWidget(noiseGateAttackSlider_, 4, 1);
-    grid->addWidget(noiseGateAttackValueLabel_, 4, 2);
+    grid->addWidget(new QLabel("  Attack"), 5, 0);
+    grid->addWidget(noiseGateAttackSlider_, 5, 1);
+    grid->addWidget(noiseGateAttackValueLabel_, 5, 2);
 
     noiseGateReleaseSlider_ = new QSlider(Qt::Horizontal);
     noiseGateReleaseSlider_->setRange(10, 1000);
     noiseGateReleaseSlider_->setValue(80);
     noiseGateReleaseValueLabel_ = new QLabel("80 ms");
-    grid->addWidget(new QLabel("  Release"), 5, 0);
-    grid->addWidget(noiseGateReleaseSlider_, 5, 1);
-    grid->addWidget(noiseGateReleaseValueLabel_, 5, 2);
+    grid->addWidget(new QLabel("  Release"), 6, 0);
+    grid->addWidget(noiseGateReleaseSlider_, 6, 1);
+    grid->addWidget(noiseGateReleaseValueLabel_, 6, 2);
 
-    grid->addWidget(new QLabel("Voice effect"), 6, 0);
+    compressorEnable_ = new QCheckBox("Compressor");
+    compressorThresholdSlider_ = new QSlider(Qt::Horizontal);
+    compressorThresholdSlider_->setRange(-60, 0);
+    compressorThresholdSlider_->setValue(-20);
+    compressorThresholdValueLabel_ = new QLabel("-20 dB");
+    grid->addWidget(compressorEnable_, 7, 0);
+    grid->addWidget(compressorThresholdSlider_, 7, 1);
+    grid->addWidget(compressorThresholdValueLabel_, 7, 2);
+
+    compressorRatioSlider_ = new QSlider(Qt::Horizontal);
+    compressorRatioSlider_->setRange(1, 10);
+    compressorRatioSlider_->setValue(3);
+    compressorRatioValueLabel_ = new QLabel("3:1");
+    grid->addWidget(new QLabel("  Ratio"), 8, 0);
+    grid->addWidget(compressorRatioSlider_, 8, 1);
+    grid->addWidget(compressorRatioValueLabel_, 8, 2);
+
+    grid->addWidget(new QLabel("Voice effect"), 9, 0);
     voiceEffectCombo_ = new QComboBox();
     voiceEffectCombo_->addItem("None", static_cast<int>(VoiceEffect::None));
     voiceEffectCombo_->addItem("Robot Voice", static_cast<int>(VoiceEffect::Robot));
@@ -206,10 +232,12 @@ void MainWindow::buildUi() {
     voiceEffectCombo_->addItem("Deep Voice", static_cast<int>(VoiceEffect::DeepVoice));
     voiceEffectCombo_->addItem("Chipmunk", static_cast<int>(VoiceEffect::Chipmunk));
     voiceEffectCombo_->addItem("Distortion", static_cast<int>(VoiceEffect::Distortion));
-    grid->addWidget(voiceEffectCombo_, 6, 1, 1, 2);
+    grid->addWidget(voiceEffectCombo_, 9, 1, 1, 2);
 
     rootLayout->addWidget(filterGroup);
 
+    connect(limiterEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
+    connect(limiterCeilingSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
     connect(gainEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
     connect(gainSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
     connect(highPassEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
@@ -220,6 +248,9 @@ void MainWindow::buildUi() {
     connect(noiseGateSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
     connect(noiseGateAttackSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
     connect(noiseGateReleaseSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
+    connect(compressorEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
+    connect(compressorThresholdSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
+    connect(compressorRatioSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
     connect(voiceEffectCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onFiltersChanged);
 
     setCentralWidget(central);
@@ -266,6 +297,8 @@ void MainWindow::refreshDevices() {
 
 void MainWindow::applyFilterSettingsFromUi() {
     FilterSettings settings;
+    settings.limiterEnabled = limiterEnable_->isChecked();
+    settings.limiterCeilingDb = limiterCeilingSlider_->value();
     settings.gainEnabled = gainEnable_->isChecked();
     settings.gainDb = gainSlider_->value();
     settings.highPassEnabled = highPassEnable_->isChecked();
@@ -276,16 +309,22 @@ void MainWindow::applyFilterSettingsFromUi() {
     settings.noiseGateThresholdDb = noiseGateSlider_->value();
     settings.noiseGateAttackMs = noiseGateAttackSlider_->value();
     settings.noiseGateReleaseMs = noiseGateReleaseSlider_->value();
+    settings.compressorEnabled = compressorEnable_->isChecked();
+    settings.compressorThresholdDb = compressorThresholdSlider_->value();
+    settings.compressorRatio = compressorRatioSlider_->value();
     settings.voiceEffect = static_cast<VoiceEffect>(voiceEffectCombo_->currentData().toInt());
 
     engine_->setFilterSettings(settings);
 
+    limiterCeilingValueLabel_->setText(QString("%1 dB").arg(limiterCeilingSlider_->value()));
     gainValueLabel_->setText(QString("%1 dB").arg(gainSlider_->value()));
     highPassValueLabel_->setText(QString("%1 Hz").arg(highPassSlider_->value()));
     lowPassValueLabel_->setText(QString("%1 Hz").arg(lowPassSlider_->value()));
     noiseGateValueLabel_->setText(QString("%1 dB").arg(noiseGateSlider_->value()));
     noiseGateAttackValueLabel_->setText(QString("%1 ms").arg(noiseGateAttackSlider_->value()));
     noiseGateReleaseValueLabel_->setText(QString("%1 ms").arg(noiseGateReleaseSlider_->value()));
+    compressorThresholdValueLabel_->setText(QString("%1 dB").arg(compressorThresholdSlider_->value()));
+    compressorRatioValueLabel_->setText(QString("%1:1").arg(compressorRatioSlider_->value()));
 }
 
 void MainWindow::onFiltersChanged() {

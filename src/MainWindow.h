@@ -55,6 +55,10 @@ private:
     QProgressBar* levelMeter_ = nullptr;
     WaveformView* waveformView_ = nullptr;
 
+    QCheckBox* limiterEnable_ = nullptr;
+    QSlider* limiterCeilingSlider_ = nullptr;
+    QLabel* limiterCeilingValueLabel_ = nullptr;
+
     QCheckBox* gainEnable_ = nullptr;
     QSlider* gainSlider_ = nullptr;
     QLabel* gainValueLabel_ = nullptr;
@@ -74,6 +78,12 @@ private:
     QLabel* noiseGateAttackValueLabel_ = nullptr;
     QSlider* noiseGateReleaseSlider_ = nullptr;
     QLabel* noiseGateReleaseValueLabel_ = nullptr;
+
+    QCheckBox* compressorEnable_ = nullptr;
+    QSlider* compressorThresholdSlider_ = nullptr;
+    QLabel* compressorThresholdValueLabel_ = nullptr;
+    QSlider* compressorRatioSlider_ = nullptr;
+    QLabel* compressorRatioValueLabel_ = nullptr;
 
     QComboBox* voiceEffectCombo_ = nullptr;
 

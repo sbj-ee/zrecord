@@ -84,6 +84,66 @@ void NoiseGate::reset() {
     gain_ = 0.0;
 }
 
+void Compressor::configure(double sampleRate, double thresholdDb, double ratio, double attackMs, double releaseMs) {
+    thresholdDb_ = thresholdDb;
+    ratio_ = std::max(1.0, ratio);
+
+    auto timeToCoeff = [sampleRate](double ms) {
+        double seconds = std::max(ms, 0.001) / 1000.0;
+        return std::exp(-1.0 / (sampleRate * seconds));
+    };
+    attackCoeff_ = timeToCoeff(attackMs);
+    releaseCoeff_ = timeToCoeff(releaseMs);
+    reset();
+}
+
+float Compressor::process(float x) {
+    double rectified = std::fabs(static_cast<double>(x));
+    if (rectified > envelope_) {
+        envelope_ = rectified + (envelope_ - rectified) * attackCoeff_;
+    } else {
+        envelope_ = rectified + (envelope_ - rectified) * releaseCoeff_;
+    }
+
+    double levelDb = 20.0 * std::log10(std::max(envelope_, 1e-6));
+    double gainReductionDb = 0.0;
+    if (levelDb > thresholdDb_) {
+        double overDb = levelDb - thresholdDb_;
+        gainReductionDb = overDb - overDb / ratio_;
+    }
+
+    double gainLinear = std::pow(10.0, -gainReductionDb / 20.0);
+    return static_cast<float>(x * gainLinear);
+}
+
+void Compressor::reset() {
+    envelope_ = 0.0;
+}
+
+void Limiter::configure(double sampleRate, double ceilingDb, double releaseMs) {
+    ceilingLinear_ = std::pow(10.0, ceilingDb / 20.0);
+    double seconds = std::max(releaseMs, 1.0) / 1000.0;
+    releaseCoeff_ = std::exp(-1.0 / (sampleRate * seconds));
+    reset();
+}
+
+float Limiter::process(float x) {
+    double absX = std::fabs(static_cast<double>(x));
+    double desiredGain = absX > ceilingLinear_ ? (ceilingLinear_ / absX) : 1.0;
+
+    if (desiredGain < gain_) {
+        gain_ = desiredGain;
+    } else {
+        gain_ = desiredGain + (gain_ - desiredGain) * releaseCoeff_;
+    }
+
+    return static_cast<float>(x * gain_);
+}
+
+void Limiter::reset() {
+    gain_ = 1.0;
+}
+
 void RingModulator::configure(double sampleRate, double carrierHz) {
     sampleRate_ = sampleRate;
     carrierHz_ = carrierHz;
@@ -205,9 +265,11 @@ FilterSettings FilterChain::settings() const {
 }
 
 void FilterChain::reconfigureFilters() {
+    limiter_.assign(static_cast<size_t>(channels_), Limiter{});
     highPass_.assign(static_cast<size_t>(channels_), Biquad{});
     lowPass_.assign(static_cast<size_t>(channels_), Biquad{});
     noiseGate_.assign(static_cast<size_t>(channels_), NoiseGate{});
+    compressor_.assign(static_cast<size_t>(channels_), Compressor{});
     ringMod_.assign(static_cast<size_t>(channels_), RingModulator{});
     echo_.assign(static_cast<size_t>(channels_), EchoEffect{});
     pitchShifter_.assign(static_cast<size_t>(channels_), PitchShifter{});
@@ -221,10 +283,13 @@ void FilterChain::reconfigureFilters() {
     }
 
     for (int c = 0; c < channels_; ++c) {
+        limiter_[c].configure(sampleRate_, settings_.limiterCeilingDb, 50.0);
         highPass_[c].configure(Biquad::Type::HighPass, sampleRate_, settings_.highPassHz);
         lowPass_[c].configure(Biquad::Type::LowPass, sampleRate_, settings_.lowPassHz);
         noiseGate_[c].configure(sampleRate_, settings_.noiseGateThresholdDb,
                                  settings_.noiseGateAttackMs, settings_.noiseGateReleaseMs);
+        compressor_[c].configure(sampleRate_, settings_.compressorThresholdDb,
+                                  settings_.compressorRatio, 10.0, 150.0);
         ringMod_[c].configure(sampleRate_, 30.0);
         echo_[c].configure(sampleRate_, 280.0, 0.35, 0.5);
         pitchShifter_[c].configure(pitchRatio);
@@ -240,6 +305,9 @@ void FilterChain::process(std::vector<float>& interleaved, size_t frameCount) {
             size_t idx = i * static_cast<size_t>(channels_) + static_cast<size_t>(c);
             float sample = interleaved[idx];
 
+            if (settings_.limiterEnabled) {
+                sample = limiter_[c].process(sample);
+            }
             if (settings_.gainEnabled) {
                 sample = static_cast<float>(sample * gainLinear);
             }
@@ -251,6 +319,9 @@ void FilterChain::process(std::vector<float>& interleaved, size_t frameCount) {
             }
             if (settings_.noiseGateEnabled) {
                 sample = noiseGate_[c].process(sample);
+            }
+            if (settings_.compressorEnabled) {
+                sample = compressor_[c].process(sample);
             }
 
             switch (settings_.voiceEffect) {

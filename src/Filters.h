@@ -38,6 +38,38 @@ private:
     double gain_ = 1.0;
 };
 
+// Downward compressor: reduces gain above a threshold by a fixed ratio,
+// with an attack/release-smoothed envelope follower, to even out overall
+// dynamics (distinct from the Limiter, which only catches peaks).
+class Compressor {
+public:
+    void configure(double sampleRate, double thresholdDb, double ratio, double attackMs, double releaseMs);
+    float process(float x);
+    void reset();
+
+private:
+    double thresholdDb_ = -20.0;
+    double ratio_ = 3.0;
+    double attackCoeff_ = 0.0;
+    double releaseCoeff_ = 0.0;
+    double envelope_ = 0.0;
+};
+
+// Peak limiter with instant (sample-accurate) attack and exponential
+// release, to protect downstream filters and the recording from clipping
+// on hot input.
+class Limiter {
+public:
+    void configure(double sampleRate, double ceilingDb, double releaseMs);
+    float process(float x);
+    void reset();
+
+private:
+    double ceilingLinear_ = 1.0;
+    double releaseCoeff_ = 0.0;
+    double gain_ = 1.0;
+};
+
 // Classic "robot voice" effect: multiplies the signal by a low-frequency
 // carrier tone (ring modulation).
 class RingModulator {
@@ -101,6 +133,9 @@ private:
 enum class VoiceEffect { None, Robot, Echo, DeepVoice, Chipmunk, Distortion };
 
 struct FilterSettings {
+    bool limiterEnabled = false;
+    double limiterCeilingDb = -1.0;
+
     bool gainEnabled = false;
     double gainDb = 0.0;
 
@@ -114,6 +149,10 @@ struct FilterSettings {
     double noiseGateThresholdDb = -40.0;
     double noiseGateAttackMs = 5.0;
     double noiseGateReleaseMs = 80.0;
+
+    bool compressorEnabled = false;
+    double compressorThresholdDb = -20.0;
+    double compressorRatio = 3.0;
 
     VoiceEffect voiceEffect = VoiceEffect::None;
 };
@@ -136,9 +175,11 @@ private:
     int channels_ = 1;
     FilterSettings settings_;
 
+    std::vector<Limiter> limiter_;
     std::vector<Biquad> highPass_;
     std::vector<Biquad> lowPass_;
     std::vector<NoiseGate> noiseGate_;
+    std::vector<Compressor> compressor_;
     std::vector<RingModulator> ringMod_;
     std::vector<EchoEffect> echo_;
     std::vector<PitchShifter> pitchShifter_;

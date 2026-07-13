@@ -10,15 +10,15 @@ namespace {
 int sfFormatFor(AudioFormat format) {
     switch (format) {
         case AudioFormat::Wav:
-            return SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+            return SF_FORMAT_WAV | SF_FORMAT_PCM_24;
         case AudioFormat::Flac:
-            return SF_FORMAT_FLAC | SF_FORMAT_PCM_16;
+            return SF_FORMAT_FLAC | SF_FORMAT_PCM_24;
         case AudioFormat::OggVorbis:
             return SF_FORMAT_OGG | SF_FORMAT_VORBIS;
         case AudioFormat::Mp3:
             return SF_FORMAT_MPEG | SF_FORMAT_MPEG_LAYER_III;
     }
-    return SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+    return SF_FORMAT_WAV | SF_FORMAT_PCM_24;
 }
 
 } // namespace
