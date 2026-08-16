@@ -347,4 +347,25 @@ void FilterChain::process(std::vector<float>& interleaved, size_t frameCount) {
     }
 }
 
+void applyLinearFade(std::vector<float>& interleaved, int channels, FadeShape shape) {
+    if (channels <= 0 || interleaved.empty()) {
+        return;
+    }
+    size_t frameCount = interleaved.size() / static_cast<size_t>(channels);
+    if (frameCount == 0) {
+        return;
+    }
+    // Divide by frameCount-1 so the ramp actually reaches unity on the last
+    // frame rather than stopping just short of it.
+    double lastFrame = frameCount > 1 ? static_cast<double>(frameCount - 1) : 1.0;
+
+    for (size_t frame = 0; frame < frameCount; ++frame) {
+        double position = frameCount > 1 ? static_cast<double>(frame) / lastFrame : 1.0;
+        float gain = static_cast<float>(shape == FadeShape::In ? position : 1.0 - position);
+        for (int c = 0; c < channels; ++c) {
+            interleaved[frame * static_cast<size_t>(channels) + static_cast<size_t>(c)] *= gain;
+        }
+    }
+}
+
 } // namespace zrecord

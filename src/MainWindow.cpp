@@ -155,6 +155,8 @@ void MainWindow::buildUi() {
     pasteAction_ = addTool("Paste", "Paste at playhead", QKeySequence::Paste);
     deleteAction_ = addTool("Delete", "Delete selection", QKeySequence::Delete);
     silenceAction_ = addTool("Silence", "Silence selection", QKeySequence("Ctrl+L"));
+    fadeInAction_ = addTool("Fade In", "Ramp the selection up from silence", QKeySequence());
+    fadeOutAction_ = addTool("Fade Out", "Ramp the selection down to silence", QKeySequence());
     toolbarRow->addSpacing(12);
     undoAction_ = addTool("Undo", "Undo", QKeySequence::Undo);
     redoAction_ = addTool("Redo", "Redo", QKeySequence::Redo);
@@ -207,6 +209,8 @@ void MainWindow::buildUi() {
     connect(pasteAction_, &QAction::triggered, this, &MainWindow::onPaste);
     connect(deleteAction_, &QAction::triggered, this, &MainWindow::onDeleteSelection);
     connect(silenceAction_, &QAction::triggered, this, &MainWindow::onSilenceSelection);
+    connect(fadeInAction_, &QAction::triggered, this, &MainWindow::onFadeIn);
+    connect(fadeOutAction_, &QAction::triggered, this, &MainWindow::onFadeOut);
     connect(undoAction_, &QAction::triggered, undoStack_, &QUndoStack::undo);
     connect(redoAction_, &QAction::triggered, undoStack_, &QUndoStack::redo);
     connect(undoStack_, &QUndoStack::canUndoChanged, undoAction_, &QAction::setEnabled);
@@ -532,7 +536,8 @@ void MainWindow::setControlsEnabled(bool recording) {
     for (QAction* action : {newProjectAction_, openProjectAction_, saveProjectAction_,
                              addTrackAction_, removeTrackAction_, importAction_,
                              cutAction_, copyAction_, pasteAction_, deleteAction_,
-                             silenceAction_, applyEffectAction_}) {
+                             silenceAction_, fadeInAction_, fadeOutAction_,
+                             applyEffectAction_}) {
         action->setEnabled(!recording);
     }
     if (!recording) {
@@ -831,6 +836,26 @@ void MainWindow::onSilenceSelection() {
     trackPanel_->refresh();
 }
 
+void MainWindow::onFadeIn() {
+    if (project_.selection.isEmpty()) {
+        return;
+    }
+    const Selection sel = project_.selection;
+    undoStack_->push(new FadeCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame,
+                                      FadeShape::In, project_.channels));
+    trackPanel_->refresh();
+}
+
+void MainWindow::onFadeOut() {
+    if (project_.selection.isEmpty()) {
+        return;
+    }
+    const Selection sel = project_.selection;
+    undoStack_->push(new FadeCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame,
+                                      FadeShape::Out, project_.channels));
+    trackPanel_->refresh();
+}
+
 void MainWindow::onApplyEffect() {
     if (project_.selection.isEmpty()) {
         return;
@@ -854,6 +879,8 @@ void MainWindow::onSelectionChanged() {
     copyAction_->setEnabled(hasSelection);
     deleteAction_->setEnabled(hasSelection);
     silenceAction_->setEnabled(hasSelection);
+    fadeInAction_->setEnabled(hasSelection);
+    fadeOutAction_->setEnabled(hasSelection);
     applyEffectButton_->setEnabled(hasSelection);
     pasteAction_->setEnabled(!project_.clipboard.empty());
 }

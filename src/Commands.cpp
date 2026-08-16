@@ -65,6 +65,23 @@ void ApplyEffectCommand::apply() {
     Project::writeRange(track(), startFrame_, endFrame_, region, channels_);
 }
 
+FadeCommand::FadeCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,
+                          FadeShape shape, int channels)
+    : TrackEditCommand(project, trackIndex, shape == FadeShape::In ? "Fade In" : "Fade Out"),
+      startFrame_(startFrame),
+      endFrame_(endFrame),
+      shape_(shape),
+      channels_(channels) {}
+
+void FadeCommand::apply() {
+    std::vector<float> region = Project::copyRange(track(), startFrame_, endFrame_, channels_);
+    if (region.empty()) {
+        return;
+    }
+    applyLinearFade(region, channels_, shape_);
+    Project::writeRange(track(), startFrame_, endFrame_, region, channels_);
+}
+
 PasteCommand::PasteCommand(Project& project, int trackIndex, int64_t atFrame, std::vector<float> samples, int channels)
     : TrackEditCommand(project, trackIndex, "Paste"), atFrame_(atFrame), samples_(std::move(samples)), channels_(channels) {}
 

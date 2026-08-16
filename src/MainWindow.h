@@ -47,6 +47,8 @@ private slots:
     void onPaste();
     void onDeleteSelection();
     void onSilenceSelection();
+    void onFadeIn();
+    void onFadeOut();
     void onApplyEffect();
     void onSelectionChanged();
     void onClipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame);
@@ -91,6 +93,8 @@ private:
     QAction* pasteAction_ = nullptr;
     QAction* deleteAction_ = nullptr;
     QAction* silenceAction_ = nullptr;
+    QAction* fadeInAction_ = nullptr;
+    QAction* fadeOutAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* zoomInAction_ = nullptr;
