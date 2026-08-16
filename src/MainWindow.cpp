@@ -11,6 +11,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QProcess>
 #include <QProgressBar>
@@ -18,6 +20,7 @@
 #include <QRegularExpression>
 #include <QSlider>
 #include <QTimer>
+#include <QToolBar>
 #include <QToolButton>
 #include <QUndoStack>
 #include <QVBoxLayout>
@@ -102,11 +105,18 @@ void MainWindow::buildUi() {
     rootLayout->addLayout(micRow);
     connect(micVolumeSlider_, &QSlider::valueChanged, this, &MainWindow::onMicVolumeChanged);
 
-    // Project toolbar: file ops, add/remove track, import, edit, undo/redo, zoom.
-    auto* toolbarRow = new QHBoxLayout();
-    // Each toolbar entry is a QAction (owning the shortcut) shown through a
-    // QToolButton, so the button's label/tooltip/enabled state follow the
-    // action and the shortcut can never fire while the button is disabled.
+    // A real QToolBar rather than a row of buttons in a layout: when the
+    // window is too narrow for every entry, QToolBar folds the overflow into
+    // a "»" popup instead of forcing the window wider than the screen.
+    auto* toolBar = addToolBar("Main");
+    toolBar->setObjectName("mainToolBar");
+    toolBar->setMovable(false);
+    toolBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+    // Each entry is a QAction, so the toolbar button and the menu entry below
+    // are two views of one object -- same label, tooltip, shortcut and
+    // enabled state, and a shortcut can never fire while the button is
+    // disabled.
     auto addTool = [&](const QString& text, const QString& tip, const QKeySequence& shortcut) {
         auto* action = new QAction(text, this);
         // QToolButton labels itself from iconText(), which strips the "..."
@@ -116,12 +126,10 @@ void MainWindow::buildUi() {
         action->setToolTip(shortcut.isEmpty()
                                ? tip
                                : QString("%1 (%2)").arg(tip, shortcut.toString(QKeySequence::NativeText)));
-        addAction(action); // window-level, so the shortcut works without focus
-
-        auto* button = new QToolButton();
-        button->setDefaultAction(action);
-        button->setFocusPolicy(Qt::NoFocus); // keep Space/R reaching the shortcuts
-        toolbarRow->addWidget(button);
+        toolBar->addAction(action);
+        if (auto* button = qobject_cast<QToolButton*>(toolBar->widgetForAction(action))) {
+            button->setFocusPolicy(Qt::NoFocus); // keep Space/R reaching the shortcuts
+        }
         return action;
     };
     // Tool picker: Select drags out a time range, Move time-shifts clips.
@@ -140,16 +148,16 @@ void MainWindow::buildUi() {
                            QKeySequence());
     snapAction_->setCheckable(true);
     snapAction_->setChecked(true);
-    toolbarRow->addSpacing(12);
+    toolBar->addSeparator();
 
     newProjectAction_ = addTool("New", "New project", QKeySequence::New);
     openProjectAction_ = addTool("Open...", "Open project", QKeySequence::Open);
     saveProjectAction_ = addTool("Save...", "Save project", QKeySequence::Save);
-    toolbarRow->addSpacing(12);
+    toolBar->addSeparator();
     addTrackAction_ = addTool("+Track", "Add track", QKeySequence("Ctrl+Shift+N"));
     removeTrackAction_ = addTool("-Track", "Remove selected (or last) track", QKeySequence("Ctrl+Shift+W"));
     importAction_ = addTool("Import...", "Import audio file into selected track", QKeySequence("Ctrl+I"));
-    toolbarRow->addSpacing(12);
+    toolBar->addSeparator();
     cutAction_ = addTool("Cut", "Cut selection", QKeySequence::Cut);
     copyAction_ = addTool("Copy", "Copy selection", QKeySequence::Copy);
     pasteAction_ = addTool("Paste", "Paste at playhead", QKeySequence::Paste);
@@ -157,14 +165,18 @@ void MainWindow::buildUi() {
     silenceAction_ = addTool("Silence", "Silence selection", QKeySequence("Ctrl+L"));
     fadeInAction_ = addTool("Fade In", "Ramp the selection up from silence", QKeySequence());
     fadeOutAction_ = addTool("Fade Out", "Ramp the selection down to silence", QKeySequence());
-    toolbarRow->addSpacing(12);
+    toolBar->addSeparator();
     undoAction_ = addTool("Undo", "Undo", QKeySequence::Undo);
     redoAction_ = addTool("Redo", "Redo", QKeySequence::Redo);
-    toolbarRow->addSpacing(12);
+    toolBar->addSeparator();
     zoomInAction_ = addTool("Zoom In", "Zoom in", QKeySequence("Ctrl+1"));
     zoomOutAction_ = addTool("Zoom Out", "Zoom out", QKeySequence("Ctrl+3"));
     zoomFitAction_ = addTool("Zoom Fit", "Zoom to fit whole project", QKeySequence("Ctrl+F"));
-    toolbarRow->addStretch();
+
+    // Expanding spacer pins the recording cluster to the right-hand end.
+    auto* toolBarSpacer = new QWidget();
+    toolBarSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    toolBar->addWidget(toolBarSpacer);
 
     recordingBar_ = new QWidget();
     auto* recordingBarLayout = new QHBoxLayout(recordingBar_);
@@ -194,9 +206,7 @@ void MainWindow::buildUi() {
     connect(recordingStopButton_, &QToolButton::clicked, this, &MainWindow::onToggleRecord);
 
     recordingBar_->hide();
-    toolbarRow->addWidget(recordingBar_);
-
-    rootLayout->addLayout(toolbarRow);
+    toolBar->addWidget(recordingBar_);
 
     connect(newProjectAction_, &QAction::triggered, this, &MainWindow::onNewProject);
     connect(openProjectAction_, &QAction::triggered, this, &MainWindow::onOpenProject);
@@ -240,9 +250,8 @@ void MainWindow::buildUi() {
     recordButton_->setFocusPolicy(Qt::NoFocus);
     connect(recordButton_, &QPushButton::clicked, this, &MainWindow::onToggleRecord);
 
-    recordAction_ = new QAction(this);
+    recordAction_ = new QAction("Record / Stop", this);
     recordAction_->setShortcut(QKeySequence("R"));
-    addAction(recordAction_);
     connect(recordAction_, &QAction::triggered, this, &MainWindow::onToggleRecord);
     recordButton_->setToolTip("Start/stop recording (R)");
 
@@ -289,9 +298,8 @@ void MainWindow::buildUi() {
     connect(playButton_, &QPushButton::clicked, this, &MainWindow::onTogglePlayback);
     secondaryRow->addWidget(playButton_);
 
-    playAction_ = new QAction(this);
+    playAction_ = new QAction("Play / Stop", this);
     playAction_->setShortcut(QKeySequence(Qt::Key_Space));
-    addAction(playAction_);
     connect(playAction_, &QAction::triggered, this, &MainWindow::onTogglePlayback);
 
     secondaryRow->addWidget(new QLabel("Export as:"));
@@ -308,9 +316,8 @@ void MainWindow::buildUi() {
     connect(exportButton_, &QPushButton::clicked, this, &MainWindow::onExport);
     secondaryRow->addWidget(exportButton_);
 
-    exportAction_ = new QAction(this);
+    exportAction_ = new QAction("Export Mixdown...", this);
     exportAction_->setShortcut(QKeySequence("Ctrl+E"));
-    addAction(exportAction_);
     connect(exportAction_, &QAction::triggered, this, &MainWindow::onExport);
 
     rootLayout->addLayout(secondaryRow);
@@ -414,9 +421,8 @@ void MainWindow::buildUi() {
     connect(applyEffectButton_, &QPushButton::clicked, this, &MainWindow::onApplyEffect);
 
     // Ctrl+R mirrors Audacity's "repeat/apply last effect" muscle memory.
-    applyEffectAction_ = new QAction(this);
+    applyEffectAction_ = new QAction("Apply Filters to Selection", this);
     applyEffectAction_->setShortcut(QKeySequence("Ctrl+R"));
-    addAction(applyEffectAction_);
     connect(applyEffectAction_, &QAction::triggered, this, &MainWindow::onApplyEffect);
 
     rootLayout->addWidget(filterGroup);
@@ -439,7 +445,55 @@ void MainWindow::buildUi() {
     connect(voiceEffectCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onFiltersChanged);
 
     setCentralWidget(central);
+    buildMenus();
     resize(900, 820);
+}
+
+void MainWindow::buildMenus() {
+    quitAction_ = new QAction("Quit", this);
+    quitAction_->setShortcut(QKeySequence::Quit);
+    connect(quitAction_, &QAction::triggered, this, &MainWindow::close);
+
+    QMenu* fileMenu = menuBar()->addMenu("&File");
+    fileMenu->addAction(newProjectAction_);
+    fileMenu->addAction(openProjectAction_);
+    fileMenu->addAction(saveProjectAction_);
+    fileMenu->addSeparator();
+    fileMenu->addAction(importAction_);
+    fileMenu->addAction(exportAction_);
+    fileMenu->addSeparator();
+    fileMenu->addAction(quitAction_);
+
+    QMenu* editMenu = menuBar()->addMenu("&Edit");
+    editMenu->addAction(undoAction_);
+    editMenu->addAction(redoAction_);
+    editMenu->addSeparator();
+    editMenu->addAction(cutAction_);
+    editMenu->addAction(copyAction_);
+    editMenu->addAction(pasteAction_);
+    editMenu->addAction(deleteAction_);
+    editMenu->addSeparator();
+    editMenu->addAction(silenceAction_);
+    editMenu->addAction(fadeInAction_);
+    editMenu->addAction(fadeOutAction_);
+    editMenu->addAction(applyEffectAction_);
+
+    QMenu* trackMenu = menuBar()->addMenu("&Tracks");
+    trackMenu->addAction(addTrackAction_);
+    trackMenu->addAction(removeTrackAction_);
+
+    QMenu* transportMenu = menuBar()->addMenu("Trans&port");
+    transportMenu->addAction(recordAction_);
+    transportMenu->addAction(playAction_);
+
+    QMenu* viewMenu = menuBar()->addMenu("&View");
+    viewMenu->addAction(selectToolAction_);
+    viewMenu->addAction(moveToolAction_);
+    viewMenu->addAction(snapAction_);
+    viewMenu->addSeparator();
+    viewMenu->addAction(zoomInAction_);
+    viewMenu->addAction(zoomOutAction_);
+    viewMenu->addAction(zoomFitAction_);
 }
 
 void MainWindow::queryInitialMicVolume() {
@@ -881,6 +935,10 @@ void MainWindow::onSelectionChanged() {
     silenceAction_->setEnabled(hasSelection);
     fadeInAction_->setEnabled(hasSelection);
     fadeOutAction_->setEnabled(hasSelection);
+    // The button is a plain QPushButton (it isn't driven by the action), so
+    // both need setting or the menu entry advertises itself as available
+    // while the button is greyed out.
+    applyEffectAction_->setEnabled(hasSelection);
     applyEffectButton_->setEnabled(hasSelection);
     pasteAction_->setEnabled(!project_.clipboard.empty());
 }

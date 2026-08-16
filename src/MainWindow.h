@@ -55,6 +55,9 @@ private slots:
 
 private:
     void buildUi();
+    // Menus reuse the same QActions the toolbar shows, so the two can't drift
+    // apart and the menu advertises each shortcut for free.
+    void buildMenus();
     FilterSettings filterSettingsFromUi() const;
     void applyFilterSettingsFromUi();
     void setControlsEnabled(bool recording);
@@ -113,6 +116,7 @@ private:
     QAction* playAction_ = nullptr;
     QAction* exportAction_ = nullptr;
     QAction* applyEffectAction_ = nullptr;
+    QAction* quitAction_ = nullptr;
 
     // Recording cluster at the right of the toolbar: a blinking
     // "● REC hh:mm:ss" plus Stop and Mute controls. Hidden unless a take is
