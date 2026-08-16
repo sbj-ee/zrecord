@@ -37,6 +37,12 @@ public:
     void stopRecording();
     bool isRecording() const;
 
+    // While muted, incoming audio is replaced with silence before it reaches
+    // the filter chain, so the take keeps running (and stays in sync) but
+    // captures nothing -- a "cough button". Cleared by startRecording().
+    void setInputMuted(bool muted);
+    bool isInputMuted() const;
+
     // Plays back `project` from its current playheadFrame. `project` must
     // outlive the AudioEngine or until stopPlayback() is called.
     bool startPlayback(Project& project, std::string& errorMessage);
@@ -85,6 +91,7 @@ private:
 
     std::atomic<float> peakLevel_{0.0f};
     std::atomic<bool> recording_{false};
+    std::atomic<bool> inputMuted_{false};
 
     int channels_ = 1;
     double sampleRate_ = 44100.0;

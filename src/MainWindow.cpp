@@ -22,6 +22,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <algorithm>
+#include <cmath>
 
 #include "AudioFileReader.h"
 #include "AudioFileWriter.h"
@@ -143,6 +144,37 @@ void MainWindow::buildUi() {
     zoomOutAction_ = addTool("Zoom Out", "Zoom out", QKeySequence("Ctrl+3"));
     zoomFitAction_ = addTool("Zoom Fit", "Zoom to fit whole project", QKeySequence("Ctrl+F"));
     toolbarRow->addStretch();
+
+    recordingBar_ = new QWidget();
+    auto* recordingBarLayout = new QHBoxLayout(recordingBar_);
+    recordingBarLayout->setContentsMargins(0, 0, 0, 0);
+    recordingBarLayout->setSpacing(6);
+
+    recordingIndicator_ = new QLabel("●  REC  00:00:00");
+    recordingIndicator_->setToolTip("A take is being recorded");
+    recordingBarLayout->addWidget(recordingIndicator_);
+
+    recordingMuteButton_ = new QToolButton();
+    recordingMuteButton_->setText("Mute");
+    recordingMuteButton_->setCheckable(true);
+    recordingMuteButton_->setFocusPolicy(Qt::NoFocus);
+    recordingMuteButton_->setToolTip("Record silence until unmuted (the take keeps running)");
+    recordingBarLayout->addWidget(recordingMuteButton_);
+
+    recordingStopButton_ = new QToolButton();
+    recordingStopButton_->setText("■ Stop");
+    recordingStopButton_->setFocusPolicy(Qt::NoFocus);
+    recordingStopButton_->setToolTip("Stop recording (R)");
+    recordingBarLayout->addWidget(recordingStopButton_);
+
+    connect(recordingMuteButton_, &QToolButton::toggled, this, [this](bool muted) {
+        engine_->setInputMuted(muted);
+    });
+    connect(recordingStopButton_, &QToolButton::clicked, this, &MainWindow::onToggleRecord);
+
+    recordingBar_->hide();
+    toolbarRow->addWidget(recordingBar_);
+
     rootLayout->addLayout(toolbarRow);
 
     connect(newProjectAction_, &QAction::triggered, this, &MainWindow::onNewProject);
@@ -549,6 +581,8 @@ void MainWindow::onToggleRecord() {
                 "QPushButton:pressed { background-color: #c4001d; }");
             setControlsEnabled(true);
             trackPanel_->beginLiveCapture(armedIndex);
+            recordingMuteButton_->setChecked(false); // startRecording() clears the engine's mute
+            recordingBar_->show();
         } else {
             QMessageBox::warning(this, "Recording failed", QString::fromStdString(error));
         }
@@ -556,6 +590,7 @@ void MainWindow::onToggleRecord() {
         engine_->stopRecording();
         std::vector<float> captured = engine_->copyCapturedBuffer();
         trackPanel_->endLiveCapture();
+        recordingBar_->hide();
 
         if (!captured.empty() && recordingArmedTrackIndex_ >= 0) {
             undoStack_->push(new AppendClipCommand(project_, recordingArmedTrackIndex_, captured, project_.channels, "Record"));
@@ -792,7 +827,22 @@ void MainWindow::onTick() {
     levelMeter_->setValue(static_cast<int>(std::min(1.0f, peak) * 100.0f));
 
     if (engine_->isRecording()) {
-        statusLabel_->setText(QString("Recording... %1").arg(formatDuration(engine_->capturedSeconds())));
+        double captured = engine_->capturedSeconds();
+        statusLabel_->setText(QString("Recording... %1").arg(formatDuration(captured)));
+
+        // Blink at 1 Hz off the take's own clock, so the indicator can't
+        // drift from the elapsed time it sits next to. A muted take shows a
+        // steady amber instead, to read clearly as "running but capturing
+        // nothing" rather than as a stopped recording.
+        bool muted = engine_->isInputMuted();
+        bool blinkOn = std::fmod(captured, 1.0) < 0.5;
+        recordingIndicator_->setText(QString("%1  %2  %3")
+                                          .arg(QString::fromUtf8("\xE2\x97\x8F"),
+                                               muted ? "MUTED" : "REC",
+                                               formatDuration(captured)));
+        recordingIndicator_->setStyleSheet(
+            QString("font-weight: bold; color: %1;")
+                .arg(muted ? "#ffa000" : (blinkOn ? "#ff1744" : "#7a1226")));
 
         std::vector<float> newSamples = engine_->consumeNewSamples();
         if (!newSamples.empty()) {

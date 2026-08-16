@@ -104,6 +104,14 @@ private:
     QAction* exportAction_ = nullptr;
     QAction* applyEffectAction_ = nullptr;
 
+    // Recording cluster at the right of the toolbar: a blinking
+    // "● REC hh:mm:ss" plus Stop and Mute controls. Hidden unless a take is
+    // in progress.
+    QWidget* recordingBar_ = nullptr;
+    QLabel* recordingIndicator_ = nullptr;
+    QToolButton* recordingStopButton_ = nullptr;
+    QToolButton* recordingMuteButton_ = nullptr;
+
     QProgressBar* levelMeter_ = nullptr;
     QLabel* statusLabel_ = nullptr;
     TrackPanel* trackPanel_ = nullptr;
