@@ -153,6 +153,23 @@ void Project::silenceRange(Track& track, int64_t startFrame, int64_t endFrame, i
     }
 }
 
+void Project::writeRange(Track& track, int64_t startFrame, int64_t endFrame, const std::vector<float>& samples, int channels) {
+    for (auto& clip : track.clips) {
+        int64_t overlapStart = std::max(clip.startFrame, startFrame);
+        int64_t overlapEnd = std::min(clip.endFrame(), endFrame);
+        if (overlapStart >= overlapEnd) {
+            continue;
+        }
+        int64_t clipLocalStart = overlapStart - clip.startFrame;
+        int64_t srcLocalStart = overlapStart - startFrame;
+        int64_t frames = overlapEnd - overlapStart;
+        std::copy(samples.begin() + static_cast<long>(srcLocalStart) * channels,
+                  samples.begin() + static_cast<long>(srcLocalStart + frames) * channels,
+                  clip.samples.begin() + static_cast<long>(clipLocalStart) * channels);
+        clip.peaks.build(clip.samples, channels);
+    }
+}
+
 std::vector<float> Project::copyRange(const Track& track, int64_t startFrame, int64_t endFrame, int channels) {
     if (endFrame <= startFrame || channels <= 0) {
         return {};

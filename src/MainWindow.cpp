@@ -215,7 +215,7 @@ void MainWindow::buildUi() {
     rootLayout->addLayout(secondaryRow);
 
     // Filters panel: applied live to the armed track's input while recording.
-    auto* filterGroup = new QGroupBox("Record Input Filters");
+    auto* filterGroup = new QGroupBox("Filters (live while recording, or apply to selection)");
     auto* grid = new QGridLayout(filterGroup);
 
     limiterEnable_ = new QCheckBox("Limiter (prevent clipping)");
@@ -306,6 +306,11 @@ void MainWindow::buildUi() {
     voiceEffectCombo_->addItem("Distortion", static_cast<int>(VoiceEffect::Distortion));
     grid->addWidget(voiceEffectCombo_, 9, 1, 1, 2);
 
+    applyEffectButton_ = new QPushButton("Apply to Selection");
+    applyEffectButton_->setToolTip("Destructively apply these filter settings to the current selection");
+    grid->addWidget(applyEffectButton_, 10, 0, 1, 3);
+    connect(applyEffectButton_, &QPushButton::clicked, this, &MainWindow::onApplyEffect);
+
     rootLayout->addWidget(filterGroup);
 
     connect(limiterEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
@@ -367,7 +372,7 @@ void MainWindow::refreshDevices() {
     }
 }
 
-void MainWindow::applyFilterSettingsFromUi() {
+FilterSettings MainWindow::filterSettingsFromUi() const {
     FilterSettings settings;
     settings.limiterEnabled = limiterEnable_->isChecked();
     settings.limiterCeilingDb = limiterCeilingSlider_->value();
@@ -385,7 +390,11 @@ void MainWindow::applyFilterSettingsFromUi() {
     settings.compressorThresholdDb = compressorThresholdSlider_->value();
     settings.compressorRatio = compressorRatioSlider_->value();
     settings.voiceEffect = static_cast<VoiceEffect>(voiceEffectCombo_->currentData().toInt());
+    return settings;
+}
 
+void MainWindow::applyFilterSettingsFromUi() {
+    FilterSettings settings = filterSettingsFromUi();
     engine_->setFilterSettings(settings);
 
     limiterCeilingValueLabel_->setText(QString("%1 dB").arg(limiterCeilingSlider_->value()));
@@ -696,12 +705,23 @@ void MainWindow::onSilenceSelection() {
     trackPanel_->refresh();
 }
 
+void MainWindow::onApplyEffect() {
+    if (project_.selection.isEmpty()) {
+        return;
+    }
+    const Selection sel = project_.selection;
+    undoStack_->push(new ApplyEffectCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame,
+                                             filterSettingsFromUi(), project_.sampleRate, project_.channels));
+    trackPanel_->refresh();
+}
+
 void MainWindow::onSelectionChanged() {
     bool hasSelection = !project_.selection.isEmpty();
     cutButton_->setEnabled(hasSelection);
     copyButton_->setEnabled(hasSelection);
     deleteButton_->setEnabled(hasSelection);
     silenceButton_->setEnabled(hasSelection);
+    applyEffectButton_->setEnabled(hasSelection);
     pasteButton_->setEnabled(!project_.clipboard.empty());
 }
 
