@@ -1,8 +1,10 @@
 #include "MainWindow.h"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QKeySequence>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -100,56 +102,69 @@ void MainWindow::buildUi() {
 
     // Project toolbar: file ops, add/remove track, import, edit, undo/redo, zoom.
     auto* toolbarRow = new QHBoxLayout();
-    auto addTool = [&](const QString& text, const QString& tip) {
+    // Each toolbar entry is a QAction (owning the shortcut) shown through a
+    // QToolButton, so the button's label/tooltip/enabled state follow the
+    // action and the shortcut can never fire while the button is disabled.
+    auto addTool = [&](const QString& text, const QString& tip, const QKeySequence& shortcut) {
+        auto* action = new QAction(text, this);
+        // QToolButton labels itself from iconText(), which strips the "..."
+        // that signals "this opens a dialog"; set it so the label survives.
+        action->setIconText(text);
+        action->setShortcut(shortcut);
+        action->setToolTip(shortcut.isEmpty()
+                               ? tip
+                               : QString("%1 (%2)").arg(tip, shortcut.toString(QKeySequence::NativeText)));
+        addAction(action); // window-level, so the shortcut works without focus
+
         auto* button = new QToolButton();
-        button->setText(text);
-        button->setToolTip(tip);
+        button->setDefaultAction(action);
+        button->setFocusPolicy(Qt::NoFocus); // keep Space/R reaching the shortcuts
         toolbarRow->addWidget(button);
-        return button;
+        return action;
     };
-    newProjectButton_ = addTool("New", "New project");
-    openProjectButton_ = addTool("Open...", "Open project");
-    saveProjectButton_ = addTool("Save...", "Save project");
+    newProjectAction_ = addTool("New", "New project", QKeySequence::New);
+    openProjectAction_ = addTool("Open...", "Open project", QKeySequence::Open);
+    saveProjectAction_ = addTool("Save...", "Save project", QKeySequence::Save);
     toolbarRow->addSpacing(12);
-    addTrackButton_ = addTool("+Track", "Add track");
-    removeTrackButton_ = addTool("-Track", "Remove selected (or last) track");
-    importButton_ = addTool("Import...", "Import audio file into selected track");
+    addTrackAction_ = addTool("+Track", "Add track", QKeySequence("Ctrl+Shift+N"));
+    removeTrackAction_ = addTool("-Track", "Remove selected (or last) track", QKeySequence("Ctrl+Shift+W"));
+    importAction_ = addTool("Import...", "Import audio file into selected track", QKeySequence("Ctrl+I"));
     toolbarRow->addSpacing(12);
-    cutButton_ = addTool("Cut", "Cut selection");
-    copyButton_ = addTool("Copy", "Copy selection");
-    pasteButton_ = addTool("Paste", "Paste at playhead");
-    deleteButton_ = addTool("Delete", "Delete selection");
-    silenceButton_ = addTool("Silence", "Silence selection");
+    cutAction_ = addTool("Cut", "Cut selection", QKeySequence::Cut);
+    copyAction_ = addTool("Copy", "Copy selection", QKeySequence::Copy);
+    pasteAction_ = addTool("Paste", "Paste at playhead", QKeySequence::Paste);
+    deleteAction_ = addTool("Delete", "Delete selection", QKeySequence::Delete);
+    silenceAction_ = addTool("Silence", "Silence selection", QKeySequence("Ctrl+L"));
     toolbarRow->addSpacing(12);
-    undoButton_ = addTool("Undo", "Undo");
-    redoButton_ = addTool("Redo", "Redo");
+    undoAction_ = addTool("Undo", "Undo", QKeySequence::Undo);
+    redoAction_ = addTool("Redo", "Redo", QKeySequence::Redo);
     toolbarRow->addSpacing(12);
-    zoomInButton_ = addTool("Zoom In", "Zoom in");
-    zoomOutButton_ = addTool("Zoom Out", "Zoom out");
-    zoomFitButton_ = addTool("Zoom Fit", "Zoom to fit whole project");
+    zoomInAction_ = addTool("Zoom In", "Zoom in", QKeySequence("Ctrl+1"));
+    zoomOutAction_ = addTool("Zoom Out", "Zoom out", QKeySequence("Ctrl+3"));
+    zoomFitAction_ = addTool("Zoom Fit", "Zoom to fit whole project", QKeySequence("Ctrl+F"));
     toolbarRow->addStretch();
     rootLayout->addLayout(toolbarRow);
 
-    connect(newProjectButton_, &QToolButton::clicked, this, &MainWindow::onNewProject);
-    connect(openProjectButton_, &QToolButton::clicked, this, &MainWindow::onOpenProject);
-    connect(saveProjectButton_, &QToolButton::clicked, this, &MainWindow::onSaveProject);
-    connect(addTrackButton_, &QToolButton::clicked, this, &MainWindow::onAddTrack);
-    connect(removeTrackButton_, &QToolButton::clicked, this, &MainWindow::onRemoveTrack);
-    connect(importButton_, &QToolButton::clicked, this, &MainWindow::onImportAudio);
-    connect(cutButton_, &QToolButton::clicked, this, &MainWindow::onCut);
-    connect(copyButton_, &QToolButton::clicked, this, &MainWindow::onCopy);
-    connect(pasteButton_, &QToolButton::clicked, this, &MainWindow::onPaste);
-    connect(deleteButton_, &QToolButton::clicked, this, &MainWindow::onDeleteSelection);
-    connect(silenceButton_, &QToolButton::clicked, this, &MainWindow::onSilenceSelection);
-    connect(undoButton_, &QToolButton::clicked, undoStack_, &QUndoStack::undo);
-    connect(redoButton_, &QToolButton::clicked, undoStack_, &QUndoStack::redo);
-    connect(undoStack_, &QUndoStack::canUndoChanged, undoButton_, &QToolButton::setEnabled);
-    connect(undoStack_, &QUndoStack::canRedoChanged, redoButton_, &QToolButton::setEnabled);
+    connect(newProjectAction_, &QAction::triggered, this, &MainWindow::onNewProject);
+    connect(openProjectAction_, &QAction::triggered, this, &MainWindow::onOpenProject);
+    connect(saveProjectAction_, &QAction::triggered, this, &MainWindow::onSaveProject);
+    connect(addTrackAction_, &QAction::triggered, this, &MainWindow::onAddTrack);
+    connect(removeTrackAction_, &QAction::triggered, this, &MainWindow::onRemoveTrack);
+    connect(importAction_, &QAction::triggered, this, &MainWindow::onImportAudio);
+    connect(cutAction_, &QAction::triggered, this, &MainWindow::onCut);
+    connect(copyAction_, &QAction::triggered, this, &MainWindow::onCopy);
+    connect(pasteAction_, &QAction::triggered, this, &MainWindow::onPaste);
+    connect(deleteAction_, &QAction::triggered, this, &MainWindow::onDeleteSelection);
+    connect(silenceAction_, &QAction::triggered, this, &MainWindow::onSilenceSelection);
+    connect(undoAction_, &QAction::triggered, undoStack_, &QUndoStack::undo);
+    connect(redoAction_, &QAction::triggered, undoStack_, &QUndoStack::redo);
+    connect(undoStack_, &QUndoStack::canUndoChanged, undoAction_, &QAction::setEnabled);
+    connect(undoStack_, &QUndoStack::canRedoChanged, redoAction_, &QAction::setEnabled);
     connect(undoStack_, &QUndoStack::indexChanged, this, [this](int) {
         trackPanel_->refresh();
     });
-    undoButton_->setEnabled(false);
-    redoButton_->setEnabled(false);
+    undoAction_->setEnabled(false);
+    redoAction_->setEnabled(false);
 
     // Big red record/stop button.
     recordButton_ = new QPushButton("●  RECORD");
@@ -167,7 +182,14 @@ void MainWindow::buildUi() {
         "}"
         "QPushButton:hover { background-color: #e53935; }"
         "QPushButton:pressed { background-color: #b71c1c; }");
+    recordButton_->setFocusPolicy(Qt::NoFocus);
     connect(recordButton_, &QPushButton::clicked, this, &MainWindow::onToggleRecord);
+
+    recordAction_ = new QAction(this);
+    recordAction_->setShortcut(QKeySequence("R"));
+    addAction(recordAction_);
+    connect(recordAction_, &QAction::triggered, this, &MainWindow::onToggleRecord);
+    recordButton_->setToolTip("Start/stop recording (R)");
 
     auto* recordRow = new QHBoxLayout();
     recordRow->addStretch();
@@ -190,15 +212,22 @@ void MainWindow::buildUi() {
     trackPanel_->setMinimumHeight(260);
     rootLayout->addWidget(trackPanel_, 1);
     connect(trackPanel_, &TrackPanel::selectionChanged, this, &MainWindow::onSelectionChanged);
-    connect(zoomInButton_, &QToolButton::clicked, trackPanel_, &TrackPanel::zoomIn);
-    connect(zoomOutButton_, &QToolButton::clicked, trackPanel_, &TrackPanel::zoomOut);
-    connect(zoomFitButton_, &QToolButton::clicked, trackPanel_, &TrackPanel::zoomToFit);
+    connect(zoomInAction_, &QAction::triggered, trackPanel_, &TrackPanel::zoomIn);
+    connect(zoomOutAction_, &QAction::triggered, trackPanel_, &TrackPanel::zoomOut);
+    connect(zoomFitAction_, &QAction::triggered, trackPanel_, &TrackPanel::zoomToFit);
 
     // Playback / export row.
     auto* secondaryRow = new QHBoxLayout();
     playButton_ = new QPushButton("▶  Play");
+    playButton_->setFocusPolicy(Qt::NoFocus);
+    playButton_->setToolTip("Play/stop from the playhead (Space)");
     connect(playButton_, &QPushButton::clicked, this, &MainWindow::onTogglePlayback);
     secondaryRow->addWidget(playButton_);
+
+    playAction_ = new QAction(this);
+    playAction_->setShortcut(QKeySequence(Qt::Key_Space));
+    addAction(playAction_);
+    connect(playAction_, &QAction::triggered, this, &MainWindow::onTogglePlayback);
 
     secondaryRow->addWidget(new QLabel("Export as:"));
     formatCombo_ = new QComboBox();
@@ -209,8 +238,15 @@ void MainWindow::buildUi() {
     secondaryRow->addWidget(formatCombo_);
 
     exportButton_ = new QPushButton("Export Mixdown...");
+    exportButton_->setFocusPolicy(Qt::NoFocus);
+    exportButton_->setToolTip("Export the mixed project to a file (Ctrl+E)");
     connect(exportButton_, &QPushButton::clicked, this, &MainWindow::onExport);
     secondaryRow->addWidget(exportButton_);
+
+    exportAction_ = new QAction(this);
+    exportAction_->setShortcut(QKeySequence("Ctrl+E"));
+    addAction(exportAction_);
+    connect(exportAction_, &QAction::triggered, this, &MainWindow::onExport);
 
     rootLayout->addLayout(secondaryRow);
 
@@ -307,9 +343,16 @@ void MainWindow::buildUi() {
     grid->addWidget(voiceEffectCombo_, 9, 1, 1, 2);
 
     applyEffectButton_ = new QPushButton("Apply to Selection");
-    applyEffectButton_->setToolTip("Destructively apply these filter settings to the current selection");
+    applyEffectButton_->setFocusPolicy(Qt::NoFocus);
+    applyEffectButton_->setToolTip("Destructively apply these filter settings to the current selection (Ctrl+R)");
     grid->addWidget(applyEffectButton_, 10, 0, 1, 3);
     connect(applyEffectButton_, &QPushButton::clicked, this, &MainWindow::onApplyEffect);
+
+    // Ctrl+R mirrors Audacity's "repeat/apply last effect" muscle memory.
+    applyEffectAction_ = new QAction(this);
+    applyEffectAction_->setShortcut(QKeySequence("Ctrl+R"));
+    addAction(applyEffectAction_);
+    connect(applyEffectAction_, &QAction::triggered, this, &MainWindow::onApplyEffect);
 
     rootLayout->addWidget(filterGroup);
 
@@ -417,6 +460,25 @@ void MainWindow::setControlsEnabled(bool recording) {
     exportButton_->setEnabled(!recording);
     playButton_->setEnabled(!recording);
     formatCombo_->setEnabled(!recording);
+
+    // Keep the shortcut-only actions in lockstep with their buttons, so e.g.
+    // Space can't start playback in the middle of a take.
+    exportAction_->setEnabled(!recording);
+    playAction_->setEnabled(!recording);
+
+    // Editing the timeline while the input stream is live would race the
+    // take that's being captured, so gate those on recording too.
+    for (QAction* action : {newProjectAction_, openProjectAction_, saveProjectAction_,
+                             addTrackAction_, removeTrackAction_, importAction_,
+                             cutAction_, copyAction_, pasteAction_, deleteAction_,
+                             silenceAction_, applyEffectAction_}) {
+        action->setEnabled(!recording);
+    }
+    if (!recording) {
+        onSelectionChanged(); // restore selection-dependent enablement
+    }
+    undoAction_->setEnabled(!recording && undoStack_->canUndo());
+    redoAction_->setEnabled(!recording && undoStack_->canRedo());
 
     bool hasContent = projectHasAnyContent();
     channelsCombo_->setEnabled(!recording && !hasContent);
@@ -675,7 +737,7 @@ void MainWindow::onCopy() {
     std::lock_guard<std::mutex> lock(project_.mutex);
     project_.clipboard = Project::copyRange(project_.tracks[static_cast<size_t>(sel.trackIndex)],
                                              sel.startFrame, sel.endFrame, project_.channels);
-    pasteButton_->setEnabled(!project_.clipboard.empty());
+    pasteAction_->setEnabled(!project_.clipboard.empty());
 }
 
 void MainWindow::onPaste() {
@@ -717,12 +779,12 @@ void MainWindow::onApplyEffect() {
 
 void MainWindow::onSelectionChanged() {
     bool hasSelection = !project_.selection.isEmpty();
-    cutButton_->setEnabled(hasSelection);
-    copyButton_->setEnabled(hasSelection);
-    deleteButton_->setEnabled(hasSelection);
-    silenceButton_->setEnabled(hasSelection);
+    cutAction_->setEnabled(hasSelection);
+    copyAction_->setEnabled(hasSelection);
+    deleteAction_->setEnabled(hasSelection);
+    silenceAction_->setEnabled(hasSelection);
     applyEffectButton_->setEnabled(hasSelection);
-    pasteButton_->setEnabled(!project_.clipboard.empty());
+    pasteAction_->setEnabled(!project_.clipboard.empty());
 }
 
 void MainWindow::onTick() {
