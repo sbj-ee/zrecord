@@ -3,6 +3,7 @@
 #include <QUndoCommand>
 #include <optional>
 
+#include "Filters.h"
 #include "Project.h"
 
 namespace zrecord {
@@ -59,6 +60,27 @@ protected:
 private:
     int64_t startFrame_;
     int64_t endFrame_;
+};
+
+// Runs a selection through a FilterChain configured with `settings` and
+// writes the result back in place (same length, same clip boundaries). The
+// chain starts from a clean state, so attack/release-style filters (noise
+// gate, compressor, limiter) don't carry over context from audio before the
+// selection -- a known limitation of applying an effect to an isolated span.
+class ApplyEffectCommand : public TrackEditCommand {
+public:
+    ApplyEffectCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,
+                        const FilterSettings& settings, double sampleRate, int channels);
+
+protected:
+    void apply() override;
+
+private:
+    int64_t startFrame_;
+    int64_t endFrame_;
+    FilterSettings settings_;
+    double sampleRate_;
+    int channels_;
 };
 
 // Inserts audio at a given frame, rippling later clips right. Used for

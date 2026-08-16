@@ -46,10 +46,12 @@ private slots:
     void onPaste();
     void onDeleteSelection();
     void onSilenceSelection();
+    void onApplyEffect();
     void onSelectionChanged();
 
 private:
     void buildUi();
+    FilterSettings filterSettingsFromUi() const;
     void applyFilterSettingsFromUi();
     void setControlsEnabled(bool recording);
     void queryInitialMicVolume();
@@ -125,6 +127,7 @@ private:
     QLabel* compressorRatioValueLabel_ = nullptr;
 
     QComboBox* voiceEffectCombo_ = nullptr;
+    QPushButton* applyEffectButton_ = nullptr;
 
     QTimer* timer_ = nullptr;
 };

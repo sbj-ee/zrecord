@@ -41,6 +41,28 @@ void SilenceSelectionCommand::apply() {
     Project::silenceRange(track(), startFrame_, endFrame_, project().channels);
 }
 
+ApplyEffectCommand::ApplyEffectCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,
+                                        const FilterSettings& settings, double sampleRate, int channels)
+    : TrackEditCommand(project, trackIndex, "Apply Effect"),
+      startFrame_(startFrame),
+      endFrame_(endFrame),
+      settings_(settings),
+      sampleRate_(sampleRate),
+      channels_(channels) {}
+
+void ApplyEffectCommand::apply() {
+    std::vector<float> region = Project::copyRange(track(), startFrame_, endFrame_, channels_);
+    if (region.empty()) {
+        return;
+    }
+    FilterChain chain;
+    chain.prepare(sampleRate_, channels_);
+    chain.setSettings(settings_);
+    int64_t frameCount = channels_ > 0 ? static_cast<int64_t>(region.size()) / channels_ : 0;
+    chain.process(region, static_cast<size_t>(frameCount));
+    Project::writeRange(track(), startFrame_, endFrame_, region, channels_);
+}
+
 PasteCommand::PasteCommand(Project& project, int trackIndex, int64_t atFrame, std::vector<float> samples, int channels)
     : TrackEditCommand(project, trackIndex, "Paste"), atFrame_(atFrame), samples_(std::move(samples)), channels_(channels) {}
 

@@ -109,6 +109,13 @@ public:
     // (silence-filled where no clip covers a gap). Used by Copy.
     static std::vector<float> copyRange(const Track& track, int64_t startFrame, int64_t endFrame, int channels);
 
+    // Overwrites [startFrame, endFrame) in place with `samples` (which must
+    // hold (endFrame-startFrame)*channels values); track length and clip
+    // boundaries are unchanged. Frames in a gap (not covered by any clip)
+    // are left as-is, since there's no clip to hold them. Used to write back
+    // the result of processing a selection through an effect.
+    static void writeRange(Track& track, int64_t startFrame, int64_t endFrame, const std::vector<float>& samples, int channels);
+
     // Appends `samples` as a new clip at the track's current end.
     static void appendClip(Track& track, const std::vector<float>& samples, int channels);
 
