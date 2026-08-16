@@ -59,11 +59,18 @@ signals:
     // command.
     void clipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame);
 
+    // Label interactions. As with clip moves, the panel doesn't mutate the
+    // project or raise dialogs itself -- MainWindow owns both.
+    void labelActivated(int labelIndex);
+    void labelContextMenuRequested(int labelIndex, const QPoint& globalPos);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(class QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
@@ -95,6 +102,9 @@ private:
     bool canPlaceClip(int trackIndex, int64_t start, int64_t length, const Clip* excludeClip) const;
     void drawLaneWaveform(class QPainter& painter, const Track& track, int laneTop, int w,
                            const QColor& waveColor, const Clip* skipClip);
+    void drawLabelStrip(class QPainter& painter, int w);
+    // Index of the label whose marker or text sits under `pos`, or -1.
+    int labelIndexAt(const QPoint& pos) const;
     void drawClipDragPreview(class QPainter& painter, int w);
     // The clip currently being dragged, or nullptr when no drag is in flight.
     const Clip* draggedClip() const;
@@ -145,6 +155,10 @@ private:
 
     static constexpr int kHeaderWidth = 150;
     static constexpr int kRulerHeight = 24;
+    static constexpr int kLabelStripHeight = 20;
+    // Track lanes start below the ruler and the label strip; everything that
+    // positions a lane goes through this rather than adding the two up itself.
+    static constexpr int lanesTop() { return kRulerHeight + kLabelStripHeight; }
     static constexpr int kLaneHeight = 90;
     static constexpr int kScrollBarHeight = 16;
     static constexpr int kMaxLiveColumns = 2000;

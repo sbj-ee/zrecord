@@ -58,6 +58,18 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
     }
     root["tracks"] = tracksArray;
 
+    QJsonArray labelsArray;
+    for (const Label& label : project.labels) {
+        QJsonObject labelObj;
+        labelObj["text"] = QString::fromStdString(label.text);
+        // Frame counts can exceed what a JSON double represents exactly, so
+        // they're written as strings here and in the clip entries above.
+        labelObj["startFrame"] = QString::number(label.startFrame);
+        labelObj["endFrame"] = QString::number(label.endFrame);
+        labelsArray.append(labelObj);
+    }
+    root["labels"] = labelsArray;
+
     QFile jsonFile(dir.filePath("project.json"));
     if (!jsonFile.open(QIODevice::WriteOnly)) {
         errorMessage = "Could not write project.json";
@@ -85,6 +97,7 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
     project.sampleRate = root["sampleRate"].toDouble(44100.0);
     project.channels = root["channels"].toInt(2);
     project.tracks.clear();
+    project.labels.clear();
     project.selection.clear();
     project.playheadFrame = 0;
 
@@ -115,6 +128,18 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
                   [](const Clip& a, const Clip& b) { return a.startFrame < b.startFrame; });
         project.tracks.push_back(std::move(track));
     }
+
+    for (const QJsonValue& labelValue : root["labels"].toArray()) {
+        QJsonObject labelObj = labelValue.toObject();
+        Label label;
+        label.text = labelObj["text"].toString().toStdString();
+        label.startFrame = labelObj["startFrame"].toString().toLongLong();
+        label.endFrame = labelObj["endFrame"].toString().toLongLong();
+        project.labels.push_back(std::move(label));
+    }
+    std::sort(project.labels.begin(), project.labels.end(),
+              [](const Label& a, const Label& b) { return a.startFrame < b.startFrame; });
+
     return true;
 }
 

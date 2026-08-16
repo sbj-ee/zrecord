@@ -52,6 +52,9 @@ private slots:
     void onApplyEffect();
     void onSelectionChanged();
     void onClipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame);
+    void onAddLabel();
+    void onLabelActivated(int labelIndex);
+    void onLabelContextMenu(int labelIndex, const QPoint& globalPos);
 
 private:
     void buildUi();
@@ -108,6 +111,7 @@ private:
     QAction* selectToolAction_ = nullptr;
     QAction* moveToolAction_ = nullptr;
     QAction* snapAction_ = nullptr;
+    QAction* addLabelAction_ = nullptr;
 
     // Transport/export keep their custom-styled QPushButtons, so these
     // actions exist only to carry the shortcut; their enabled state is kept

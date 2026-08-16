@@ -203,11 +203,20 @@ void Project::appendClip(Track& track, const std::vector<float>& samples, int ch
     track.clips.push_back(std::move(clip));
 }
 
+int Project::insertLabel(const Label& label) {
+    auto pos = std::lower_bound(labels.begin(), labels.end(), label.startFrame,
+                                 [](const Label& l, int64_t f) { return l.startFrame < f; });
+    int index = static_cast<int>(pos - labels.begin());
+    labels.insert(pos, label);
+    return index;
+}
+
 void Project::reset() {
     std::lock_guard<std::mutex> lock(mutex);
     sampleRate = 44100.0;
     channels = 2;
     tracks.clear();
+    labels.clear();
     selection.clear();
     playheadFrame = 0;
     clipboard.clear();

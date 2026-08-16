@@ -144,6 +144,47 @@ void MoveClipCommand::undo() {
     project_.selection.clear();
 }
 
+AddLabelCommand::AddLabelCommand(Project& project, Label label)
+    : QUndoCommand("Add Label"), project_(project), label_(std::move(label)) {}
+
+void AddLabelCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    insertedIndex_ = project_.insertLabel(label_);
+}
+
+void AddLabelCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.labels.erase(project_.labels.begin() + insertedIndex_);
+}
+
+RemoveLabelCommand::RemoveLabelCommand(Project& project, int index)
+    : QUndoCommand("Remove Label"), project_(project), index_(index) {}
+
+void RemoveLabelCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    removed_ = project_.labels[static_cast<size_t>(index_)];
+    project_.labels.erase(project_.labels.begin() + index_);
+}
+
+void RemoveLabelCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.labels.insert(project_.labels.begin() + index_, removed_);
+}
+
+RenameLabelCommand::RenameLabelCommand(Project& project, int index, std::string text)
+    : QUndoCommand("Rename Label"), project_(project), index_(index), newText_(std::move(text)) {}
+
+void RenameLabelCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    oldText_ = project_.labels[static_cast<size_t>(index_)].text;
+    project_.labels[static_cast<size_t>(index_)].text = newText_;
+}
+
+void RenameLabelCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.labels[static_cast<size_t>(index_)].text = oldText_;
+}
+
 AddTrackCommand::AddTrackCommand(Project& project, std::string name)
     : QUndoCommand("Add Track"), project_(project), name_(std::move(name)) {}
 

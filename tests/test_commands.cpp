@@ -41,6 +41,11 @@ private slots:
     void addAndRemoveTrack_roundTrip();
     void undoRedo_isRepeatable();
 
+    void addLabel_keepsLabelsSortedByStart();
+    void addLabel_undoRemovesTheRightOne();
+    void removeLabel_undoRestoresAtSameIndex();
+    void renameLabel_undoRestoresOldText();
+
 private:
     Project project_;
     QUndoStack stack_;
@@ -157,6 +162,71 @@ void TestCommands::undoRedo_isRepeatable() {
         stack_.redo();
         QCOMPARE(snapshot(project_, 0, 4), after);
     }
+}
+
+namespace {
+Label makeLabel(int64_t start, int64_t end, const char* text) {
+    Label label;
+    label.startFrame = start;
+    label.endFrame = end;
+    label.text = text;
+    return label;
+}
+} // namespace
+
+void TestCommands::addLabel_keepsLabelsSortedByStart() {
+    // Pushed out of order; the list must end up ordered by start frame.
+    stack_.push(new AddLabelCommand(project_, makeLabel(50, 50, "third")));
+    stack_.push(new AddLabelCommand(project_, makeLabel(10, 20, "first")));
+    stack_.push(new AddLabelCommand(project_, makeLabel(30, 30, "second")));
+
+    QCOMPARE(project_.labels.size(), size_t(3));
+    QCOMPARE(project_.labels[0].text, std::string("first"));
+    QCOMPARE(project_.labels[1].text, std::string("second"));
+    QCOMPARE(project_.labels[2].text, std::string("third"));
+    QVERIFY(project_.labels[0].isRange());
+    QVERIFY(!project_.labels[1].isRange()); // start == end is a point marker
+}
+
+void TestCommands::addLabel_undoRemovesTheRightOne() {
+    stack_.push(new AddLabelCommand(project_, makeLabel(10, 10, "a")));
+    stack_.push(new AddLabelCommand(project_, makeLabel(50, 50, "c")));
+    // Inserting in the middle shifts "c" along; undo must still remove "b".
+    stack_.push(new AddLabelCommand(project_, makeLabel(30, 30, "b")));
+
+    stack_.undo();
+
+    QCOMPARE(project_.labels.size(), size_t(2));
+    QCOMPARE(project_.labels[0].text, std::string("a"));
+    QCOMPARE(project_.labels[1].text, std::string("c"));
+}
+
+void TestCommands::removeLabel_undoRestoresAtSameIndex() {
+    stack_.push(new AddLabelCommand(project_, makeLabel(10, 10, "a")));
+    stack_.push(new AddLabelCommand(project_, makeLabel(30, 30, "b")));
+    stack_.push(new AddLabelCommand(project_, makeLabel(50, 50, "c")));
+
+    stack_.push(new RemoveLabelCommand(project_, 1));
+    QCOMPARE(project_.labels.size(), size_t(2));
+    QCOMPARE(project_.labels[1].text, std::string("c"));
+
+    stack_.undo();
+    QCOMPARE(project_.labels.size(), size_t(3));
+    QCOMPARE(project_.labels[1].text, std::string("b"));
+    QCOMPARE(project_.labels[1].startFrame, int64_t(30));
+}
+
+void TestCommands::renameLabel_undoRestoresOldText() {
+    stack_.push(new AddLabelCommand(project_, makeLabel(10, 10, "before")));
+
+    stack_.push(new RenameLabelCommand(project_, 0, "after"));
+    QCOMPARE(project_.labels[0].text, std::string("after"));
+
+    stack_.undo();
+    QCOMPARE(project_.labels[0].text, std::string("before"));
+
+    stack_.redo();
+    QCOMPARE(project_.labels[0].text, std::string("after"));
 }
 
 QTEST_GUILESS_MAIN(TestCommands)
