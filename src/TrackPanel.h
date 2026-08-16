@@ -19,7 +19,14 @@ namespace zrecord {
 class TrackPanel : public QWidget {
     Q_OBJECT
 public:
+    // Select drags out a time range; Move drags whole clips along the
+    // timeline and between tracks (Audacity's "time shift" tool).
+    enum class Tool { Select, Move };
+
     explicit TrackPanel(QWidget* parent = nullptr);
+
+    void setTool(Tool tool);
+    Tool tool() const { return tool_; }
 
     // `project` must outlive the TrackPanel or be cleared via setProject(nullptr).
     void setProject(Project* project);
@@ -41,6 +48,11 @@ public:
 
 signals:
     void selectionChanged();
+
+    // Emitted when a clip drag finishes somewhere valid. The panel does not
+    // mutate the project itself -- MainWindow turns this into an undoable
+    // command.
+    void clipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -65,7 +77,22 @@ private:
     int64_t frameAtX(int x) const;
     int xAtFrame(int64_t frame) const;
     int laneIndexAtY(int y) const;
-    PeakCache::MinMax computeColumn(const Track& track, int64_t frameStart, int64_t frameEnd) const;
+    // `skipClip`, when set, is left out -- used to hide a clip from its
+    // original lane while it is being dragged.
+    PeakCache::MinMax computeColumn(const Track& track, int64_t frameStart, int64_t frameEnd,
+                                     const Clip* skipClip = nullptr) const;
+    PeakCache::MinMax computeClipColumn(const Clip& clip, int64_t frameStart, int64_t frameEnd,
+                                         int64_t shiftFrames) const;
+    // Index of the clip covering `frame` on `trackIndex`, or -1.
+    int clipIndexAt(int trackIndex, int64_t frame) const;
+    // True if [start, start+length) on `trackIndex` is clear of every clip
+    // except `excludeClip`, i.e. the drag can legally land there.
+    bool canPlaceClip(int trackIndex, int64_t start, int64_t length, const Clip* excludeClip) const;
+    void drawLaneWaveform(class QPainter& painter, const Track& track, int laneTop, int w,
+                           const QColor& waveColor, const Clip* skipClip);
+    void drawClipDragPreview(class QPainter& painter, int w);
+    // The clip currently being dragged, or nullptr when no drag is in flight.
+    const Clip* draggedClip() const;
     void drawRuler(class QPainter& painter, int w);
     void updateScrollBarRange();
 
@@ -76,9 +103,25 @@ private:
     double framesPerPixel_ = 44.1; // ~1 pixel per millisecond at 44.1kHz by default
     int64_t viewStartFrame_ = 0;
 
+    Tool tool_ = Tool::Select;
+
     bool dragging_ = false;
     int dragTrackIndex_ = -1;
     int64_t dragAnchorFrame_ = 0;
+
+    // In-flight clip drag. Nothing in the project changes until the drop is
+    // committed, so an aborted or illegal drag costs nothing.
+    struct ClipDrag {
+        bool active = false;
+        int sourceTrack = -1;
+        int clipIndex = -1;
+        int64_t grabFrame = 0;      // timeline frame under the cursor at press
+        int64_t origStartFrame = 0;
+        int targetTrack = -1;
+        int64_t previewStartFrame = 0;
+        bool valid = true;          // false when the drop would overlap a clip
+    };
+    ClipDrag clipDrag_;
 
     struct LiveCapture {
         int trackIndex = -1;

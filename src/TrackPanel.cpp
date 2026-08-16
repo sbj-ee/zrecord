@@ -44,6 +44,46 @@ void TrackPanel::setProject(Project* project) {
     refresh();
 }
 
+void TrackPanel::setTool(Tool tool) {
+    if (tool_ == tool) {
+        return;
+    }
+    tool_ = tool;
+    clipDrag_ = ClipDrag{};
+    setCursor(tool_ == Tool::Move ? Qt::OpenHandCursor : Qt::ArrowCursor);
+    update();
+}
+
+int TrackPanel::clipIndexAt(int trackIndex, int64_t frame) const {
+    if (project_ == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(project_->tracks.size())) {
+        return -1;
+    }
+    const Track& track = project_->tracks[static_cast<size_t>(trackIndex)];
+    for (size_t i = 0; i < track.clips.size(); ++i) {
+        if (frame >= track.clips[i].startFrame && frame < track.clips[i].endFrame()) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool TrackPanel::canPlaceClip(int trackIndex, int64_t start, int64_t length, const Clip* excludeClip) const {
+    if (project_ == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(project_->tracks.size())) {
+        return false;
+    }
+    if (start < 0) {
+        return false;
+    }
+    int64_t end = start + length;
+    for (const auto& clip : project_->tracks[static_cast<size_t>(trackIndex)].clips) {
+        if (&clip == excludeClip) continue;
+        if (start < clip.endFrame() && clip.startFrame < end) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void TrackPanel::refresh() {
     rebuildHeaders();
     updateScrollBarRange();
@@ -221,10 +261,22 @@ int TrackPanel::laneIndexAtY(int y) const {
     return index;
 }
 
-PeakCache::MinMax TrackPanel::computeColumn(const Track& track, int64_t frameStart, int64_t frameEnd) const {
-    float minValue = 0.0f;
-    float maxValue = 0.0f;
-    bool first = true;
+namespace {
+// Folds one clip's peaks over [frameStart, frameEnd) into min/max, treating
+// the clip as if it began at clip.startFrame + shiftFrames. The shift is what
+// lets a clip being dragged be drawn at its preview position without touching
+// the model.
+void accumulateClip(const Clip& clip, int64_t frameStart, int64_t frameEnd, int64_t shiftFrames,
+                     float& minValue, float& maxValue, bool& first) {
+    int64_t clipStart = clip.startFrame + shiftFrames;
+    int64_t overlapStart = std::max(clipStart, frameStart);
+    int64_t overlapEnd = std::min(clipStart + clip.frameCount(), frameEnd);
+    if (overlapStart >= overlapEnd) {
+        return;
+    }
+    int64_t localStart = overlapStart - clipStart;
+    int64_t localEnd = overlapEnd - clipStart;
+
     auto accumulate = [&](float v) {
         if (first) {
             minValue = maxValue = v;
@@ -235,33 +287,111 @@ PeakCache::MinMax TrackPanel::computeColumn(const Track& track, int64_t frameSta
         }
     };
 
-    for (const auto& clip : track.clips) {
-        int64_t overlapStart = std::max(clip.startFrame, frameStart);
-        int64_t overlapEnd = std::min(clip.endFrame(), frameEnd);
-        if (overlapStart >= overlapEnd) continue;
-        int64_t localStart = overlapStart - clip.startFrame;
-        int64_t localEnd = overlapEnd - clip.startFrame;
-
-        if (frameEnd - frameStart >= PeakCache::kBlockFrames && clip.peaks.isBuilt()) {
-            int64_t blockStart = localStart / PeakCache::kBlockFrames;
-            int64_t blockEnd = (localEnd - 1) / PeakCache::kBlockFrames;
-            for (int64_t b = blockStart; b <= blockEnd; ++b) {
-                auto mm = clip.peaks.blockAt(b);
-                accumulate(mm.minValue);
-                accumulate(mm.maxValue);
-            }
-        } else {
-            for (int64_t f = localStart; f < localEnd; ++f) {
-                for (int c = 0; c < clip.channels; ++c) {
-                    size_t idx = static_cast<size_t>(f) * static_cast<size_t>(clip.channels) + static_cast<size_t>(c);
-                    if (idx < clip.samples.size()) {
-                        accumulate(clip.samples[idx]);
-                    }
+    if (frameEnd - frameStart >= PeakCache::kBlockFrames && clip.peaks.isBuilt()) {
+        int64_t blockStart = localStart / PeakCache::kBlockFrames;
+        int64_t blockEnd = (localEnd - 1) / PeakCache::kBlockFrames;
+        for (int64_t b = blockStart; b <= blockEnd; ++b) {
+            auto mm = clip.peaks.blockAt(b);
+            accumulate(mm.minValue);
+            accumulate(mm.maxValue);
+        }
+    } else {
+        for (int64_t f = localStart; f < localEnd; ++f) {
+            for (int c = 0; c < clip.channels; ++c) {
+                size_t idx = static_cast<size_t>(f) * static_cast<size_t>(clip.channels) + static_cast<size_t>(c);
+                if (idx < clip.samples.size()) {
+                    accumulate(clip.samples[idx]);
                 }
             }
         }
     }
+}
+} // namespace
+
+PeakCache::MinMax TrackPanel::computeColumn(const Track& track, int64_t frameStart, int64_t frameEnd,
+                                             const Clip* skipClip) const {
+    float minValue = 0.0f;
+    float maxValue = 0.0f;
+    bool first = true;
+    for (const auto& clip : track.clips) {
+        if (&clip == skipClip) continue;
+        accumulateClip(clip, frameStart, frameEnd, 0, minValue, maxValue, first);
+    }
     return {minValue, maxValue};
+}
+
+PeakCache::MinMax TrackPanel::computeClipColumn(const Clip& clip, int64_t frameStart, int64_t frameEnd,
+                                                 int64_t shiftFrames) const {
+    float minValue = 0.0f;
+    float maxValue = 0.0f;
+    bool first = true;
+    accumulateClip(clip, frameStart, frameEnd, shiftFrames, minValue, maxValue, first);
+    return {minValue, maxValue};
+}
+
+void TrackPanel::drawClipDragPreview(QPainter& painter, int w) {
+    const Clip* clip = draggedClip();
+    if (clip == nullptr || clipDrag_.targetTrack < 0) {
+        return;
+    }
+
+    int laneTop = kRulerHeight + clipDrag_.targetTrack * kLaneHeight;
+    int midY = laneTop + kLaneHeight / 2;
+    int usableHalfHeight = kLaneHeight / 2 - 6;
+
+    int xStart = std::max(kHeaderWidth, xAtFrame(clipDrag_.previewStartFrame));
+    int xEnd = std::min(w, xAtFrame(clipDrag_.previewStartFrame + clip->frameCount()));
+
+    // Green while the drop is legal, red once it would overlap a neighbour.
+    QColor tint = clipDrag_.valid ? QColor(80, 210, 130, 40) : QColor(220, 70, 70, 50);
+    QColor wave = clipDrag_.valid ? QColor(150, 245, 190) : QColor(255, 140, 140);
+    if (xEnd > xStart) {
+        painter.fillRect(xStart, laneTop, xEnd - xStart, kLaneHeight, tint);
+        painter.setPen(wave.darker(140));
+        painter.drawRect(xStart, laneTop, xEnd - xStart - 1, kLaneHeight - 1);
+    }
+
+    int64_t shift = clipDrag_.previewStartFrame - clip->startFrame;
+    painter.setPen(wave);
+    for (int x = std::max(kHeaderWidth, xStart); x < xEnd; ++x) {
+        int64_t frameStart = frameAtX(x);
+        int64_t frameEnd = frameAtX(x + 1);
+        if (frameEnd <= frameStart) frameEnd = frameStart + 1;
+        auto mm = computeClipColumn(*clip, frameStart, frameEnd, shift);
+        int yTop = midY - static_cast<int>(std::clamp(mm.maxValue, -1.0f, 1.0f) * usableHalfHeight);
+        int yBottom = midY - static_cast<int>(std::clamp(mm.minValue, -1.0f, 1.0f) * usableHalfHeight);
+        painter.drawLine(x, yTop, x, yBottom);
+    }
+}
+
+const Clip* TrackPanel::draggedClip() const {
+    if (!clipDrag_.active || project_ == nullptr) {
+        return nullptr;
+    }
+    if (clipDrag_.sourceTrack < 0 || clipDrag_.sourceTrack >= static_cast<int>(project_->tracks.size())) {
+        return nullptr;
+    }
+    const Track& track = project_->tracks[static_cast<size_t>(clipDrag_.sourceTrack)];
+    if (clipDrag_.clipIndex < 0 || clipDrag_.clipIndex >= static_cast<int>(track.clips.size())) {
+        return nullptr;
+    }
+    return &track.clips[static_cast<size_t>(clipDrag_.clipIndex)];
+}
+
+void TrackPanel::drawLaneWaveform(QPainter& painter, const Track& track, int laneTop, int w,
+                                   const QColor& waveColor, const Clip* skipClip) {
+    int midY = laneTop + kLaneHeight / 2;
+    int usableHalfHeight = kLaneHeight / 2 - 6;
+    painter.setPen(waveColor);
+    for (int x = kHeaderWidth; x < w; ++x) {
+        int64_t frameStart = frameAtX(x);
+        int64_t frameEnd = frameAtX(x + 1);
+        if (frameEnd <= frameStart) frameEnd = frameStart + 1;
+        auto mm = computeColumn(track, frameStart, frameEnd, skipClip);
+        int yTop = midY - static_cast<int>(std::clamp(mm.maxValue, -1.0f, 1.0f) * usableHalfHeight);
+        int yBottom = midY - static_cast<int>(std::clamp(mm.minValue, -1.0f, 1.0f) * usableHalfHeight);
+        painter.drawLine(x, yTop, x, yBottom);
+    }
 }
 
 void TrackPanel::drawRuler(QPainter& painter, int w) {
@@ -330,15 +460,11 @@ void TrackPanel::paintEvent(QPaintEvent*) {
                 painter.drawLine(xPos, yTop, xPos, yBottom);
             }
         } else {
-            for (int x = kHeaderWidth; x < w; ++x) {
-                int64_t frameStart = frameAtX(x);
-                int64_t frameEnd = frameAtX(x + 1);
-                if (frameEnd <= frameStart) frameEnd = frameStart + 1;
-                auto mm = computeColumn(track, frameStart, frameEnd);
-                int yTop = midY - static_cast<int>(std::clamp(mm.maxValue, -1.0f, 1.0f) * usableHalfHeight);
-                int yBottom = midY - static_cast<int>(std::clamp(mm.minValue, -1.0f, 1.0f) * usableHalfHeight);
-                painter.drawLine(x, yTop, x, yBottom);
-            }
+            // A clip mid-drag is lifted out of its own lane and redrawn at the
+            // preview position below, so it appears to follow the cursor.
+            const Clip* dragged = draggedClip();
+            const Clip* skip = (dragged != nullptr && clipDrag_.sourceTrack == static_cast<int>(i)) ? dragged : nullptr;
+            drawLaneWaveform(painter, track, laneTop, w, waveColor, skip);
         }
 
         if (!project_->selection.isEmpty() && project_->selection.trackIndex == static_cast<int>(i)) {
@@ -349,6 +475,8 @@ void TrackPanel::paintEvent(QPaintEvent*) {
             }
         }
     }
+
+    drawClipDragPreview(painter, w);
 
     int laneAreaBottom = kRulerHeight + static_cast<int>(project_->tracks.size()) * kLaneHeight;
     int playheadX = xAtFrame(project_->playheadFrame);
@@ -363,6 +491,26 @@ void TrackPanel::mousePressEvent(QMouseEvent* event) {
     int lane = laneIndexAtY(event->pos().y());
     if (lane < 0) return;
 
+    if (tool_ == Tool::Move) {
+        int64_t frame = frameAtX(event->pos().x());
+        int clipIndex = clipIndexAt(lane, frame);
+        if (clipIndex < 0) {
+            return; // nothing to grab here
+        }
+        const Clip& clip = project_->tracks[static_cast<size_t>(lane)].clips[static_cast<size_t>(clipIndex)];
+        clipDrag_ = ClipDrag{};
+        clipDrag_.active = true;
+        clipDrag_.sourceTrack = lane;
+        clipDrag_.clipIndex = clipIndex;
+        clipDrag_.grabFrame = frame;
+        clipDrag_.origStartFrame = clip.startFrame;
+        clipDrag_.targetTrack = lane;
+        clipDrag_.previewStartFrame = clip.startFrame;
+        setCursor(Qt::ClosedHandCursor);
+        update();
+        return;
+    }
+
     dragging_ = true;
     dragTrackIndex_ = lane;
     dragAnchorFrame_ = std::max<int64_t>(0, frameAtX(event->pos().x()));
@@ -374,6 +522,20 @@ void TrackPanel::mousePressEvent(QMouseEvent* event) {
 }
 
 void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
+    if (clipDrag_.active && project_ != nullptr) {
+        const Clip& clip = project_->tracks[static_cast<size_t>(clipDrag_.sourceTrack)]
+                               .clips[static_cast<size_t>(clipDrag_.clipIndex)];
+        int64_t delta = frameAtX(event->pos().x()) - clipDrag_.grabFrame;
+        clipDrag_.previewStartFrame = std::max<int64_t>(0, clipDrag_.origStartFrame + delta);
+
+        int lane = laneIndexAtY(event->pos().y());
+        clipDrag_.targetTrack = lane >= 0 ? lane : clipDrag_.sourceTrack;
+        clipDrag_.valid = canPlaceClip(clipDrag_.targetTrack, clipDrag_.previewStartFrame,
+                                        clip.frameCount(), &clip);
+        update();
+        return;
+    }
+
     if (!dragging_ || project_ == nullptr) return;
     int64_t frame = std::max<int64_t>(0, frameAtX(event->pos().x()));
     project_->selection.trackIndex = dragTrackIndex_;
@@ -383,6 +545,20 @@ void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void TrackPanel::mouseReleaseEvent(QMouseEvent*) {
+    if (clipDrag_.active) {
+        ClipDrag drag = clipDrag_;
+        clipDrag_ = ClipDrag{};
+        setCursor(tool_ == Tool::Move ? Qt::OpenHandCursor : Qt::ArrowCursor);
+
+        bool moved = drag.targetTrack != drag.sourceTrack || drag.previewStartFrame != drag.origStartFrame;
+        if (drag.valid && moved) {
+            emit clipMoveRequested(drag.sourceTrack, drag.clipIndex, drag.targetTrack,
+                                    static_cast<qint64>(drag.previewStartFrame));
+        }
+        update();
+        return;
+    }
+
     if (!dragging_) return;
     dragging_ = false;
     emit selectionChanged();
