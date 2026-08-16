@@ -7,6 +7,7 @@
 #include "Project.h"
 #include "TrackPanel.h"
 
+class QAction;
 class QComboBox;
 class QPushButton;
 class QToolButton;
@@ -75,22 +76,41 @@ private:
     QPushButton* playButton_ = nullptr;
     QPushButton* exportButton_ = nullptr;
 
-    QToolButton* newProjectButton_ = nullptr;
-    QToolButton* openProjectButton_ = nullptr;
-    QToolButton* saveProjectButton_ = nullptr;
-    QToolButton* addTrackButton_ = nullptr;
-    QToolButton* removeTrackButton_ = nullptr;
-    QToolButton* importButton_ = nullptr;
-    QToolButton* cutButton_ = nullptr;
-    QToolButton* copyButton_ = nullptr;
-    QToolButton* pasteButton_ = nullptr;
-    QToolButton* deleteButton_ = nullptr;
-    QToolButton* silenceButton_ = nullptr;
-    QToolButton* undoButton_ = nullptr;
-    QToolButton* redoButton_ = nullptr;
-    QToolButton* zoomInButton_ = nullptr;
-    QToolButton* zoomOutButton_ = nullptr;
-    QToolButton* zoomFitButton_ = nullptr;
+    // Toolbar items are QActions (the QToolButtons that show them are created
+    // in buildUi via setDefaultAction), so each item's shortcut, tooltip and
+    // enabled state all live in one place.
+    QAction* newProjectAction_ = nullptr;
+    QAction* openProjectAction_ = nullptr;
+    QAction* saveProjectAction_ = nullptr;
+    QAction* addTrackAction_ = nullptr;
+    QAction* removeTrackAction_ = nullptr;
+    QAction* importAction_ = nullptr;
+    QAction* cutAction_ = nullptr;
+    QAction* copyAction_ = nullptr;
+    QAction* pasteAction_ = nullptr;
+    QAction* deleteAction_ = nullptr;
+    QAction* silenceAction_ = nullptr;
+    QAction* undoAction_ = nullptr;
+    QAction* redoAction_ = nullptr;
+    QAction* zoomInAction_ = nullptr;
+    QAction* zoomOutAction_ = nullptr;
+    QAction* zoomFitAction_ = nullptr;
+
+    // Transport/export keep their custom-styled QPushButtons, so these
+    // actions exist only to carry the shortcut; their enabled state is kept
+    // in sync with the buttons in setControlsEnabled().
+    QAction* recordAction_ = nullptr;
+    QAction* playAction_ = nullptr;
+    QAction* exportAction_ = nullptr;
+    QAction* applyEffectAction_ = nullptr;
+
+    // Recording cluster at the right of the toolbar: a blinking
+    // "● REC hh:mm:ss" plus Stop and Mute controls. Hidden unless a take is
+    // in progress.
+    QWidget* recordingBar_ = nullptr;
+    QLabel* recordingIndicator_ = nullptr;
+    QToolButton* recordingStopButton_ = nullptr;
+    QToolButton* recordingMuteButton_ = nullptr;
 
     QProgressBar* levelMeter_ = nullptr;
     QLabel* statusLabel_ = nullptr;

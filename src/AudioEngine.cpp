@@ -44,6 +44,7 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
 
     channels_ = std::max(1, channels);
     sampleRate_ = sampleRate;
+    inputMuted_.store(false, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> lock(captureMutex_);
@@ -93,6 +94,14 @@ void AudioEngine::stopRecording() {
 
 bool AudioEngine::isRecording() const {
     return recording_.load();
+}
+
+void AudioEngine::setInputMuted(bool muted) {
+    inputMuted_.store(muted, std::memory_order_relaxed);
+}
+
+bool AudioEngine::isInputMuted() const {
+    return inputMuted_.load(std::memory_order_relaxed);
 }
 
 bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
@@ -215,7 +224,9 @@ int AudioEngine::outputCallbackStatic(const void* /*input*/, void* output, unsig
 
 int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
     std::vector<float> block(static_cast<size_t>(frameCount) * static_cast<size_t>(channels_), 0.0f);
-    if (input != nullptr) {
+    // A muted take still advances (so timing stays intact) but records
+    // silence, and the level meter correctly reads zero.
+    if (input != nullptr && !inputMuted_.load(std::memory_order_relaxed)) {
         std::copy(input, input + block.size(), block.begin());
     }
 
