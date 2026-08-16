@@ -135,6 +135,11 @@ void MainWindow::buildUi() {
     toolGroup->setExclusive(true);
     toolGroup->addAction(selectToolAction_);
     toolGroup->addAction(moveToolAction_);
+
+    snapAction_ = addTool("Snap", "Snap dragged clips to clip edges, the playhead and zero (hold Alt to bypass)",
+                           QKeySequence());
+    snapAction_->setCheckable(true);
+    snapAction_->setChecked(true);
     toolbarRow->addSpacing(12);
 
     newProjectAction_ = addTool("New", "New project", QKeySequence::New);
@@ -264,6 +269,9 @@ void MainWindow::buildUi() {
     });
     connect(moveToolAction_, &QAction::triggered, this, [this] {
         trackPanel_->setTool(TrackPanel::Tool::Move);
+    });
+    connect(snapAction_, &QAction::toggled, this, [this](bool enabled) {
+        trackPanel_->setSnapEnabled(enabled);
     });
     connect(zoomInAction_, &QAction::triggered, trackPanel_, &TrackPanel::zoomIn);
     connect(zoomOutAction_, &QAction::triggered, trackPanel_, &TrackPanel::zoomOut);

@@ -54,6 +54,58 @@ void TrackPanel::setTool(Tool tool) {
     update();
 }
 
+void TrackPanel::setSnapEnabled(bool enabled) {
+    snapEnabled_ = enabled;
+}
+
+int64_t TrackPanel::applySnap(int64_t rawStart, int64_t clipLength, const Clip* excludeClip,
+                               bool& snappedOut, int64_t& snapFrameOut) const {
+    snappedOut = false;
+    if (!snapEnabled_ || project_ == nullptr) {
+        return rawStart;
+    }
+
+    int64_t threshold = std::max<int64_t>(1, static_cast<int64_t>(kSnapPixels * framesPerPixel_));
+    int64_t bestStart = rawStart;
+    int64_t bestTarget = 0;
+    int64_t bestDistance = threshold + 1;
+
+    // Each target is tried against both edges of the dragged clip; the closer
+    // edge wins, which is what makes butting a clip up against its neighbour
+    // feel the same as aligning their left edges.
+    auto consider = [&](int64_t target) {
+        int64_t startDistance = std::abs(rawStart - target);
+        if (startDistance < bestDistance) {
+            bestDistance = startDistance;
+            bestStart = target;
+            bestTarget = target;
+        }
+        int64_t endDistance = std::abs(rawStart + clipLength - target);
+        if (endDistance < bestDistance && target - clipLength >= 0) {
+            bestDistance = endDistance;
+            bestStart = target - clipLength;
+            bestTarget = target;
+        }
+    };
+
+    consider(0);
+    consider(project_->playheadFrame);
+    for (const auto& track : project_->tracks) {
+        for (const auto& clip : track.clips) {
+            if (&clip == excludeClip) continue;
+            consider(clip.startFrame);
+            consider(clip.endFrame());
+        }
+    }
+
+    if (bestDistance <= threshold && bestStart >= 0) {
+        snappedOut = true;
+        snapFrameOut = bestTarget;
+        return bestStart;
+    }
+    return rawStart;
+}
+
 int TrackPanel::clipIndexAt(int trackIndex, int64_t frame) const {
     if (project_ == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(project_->tracks.size())) {
         return -1;
@@ -351,6 +403,17 @@ void TrackPanel::drawClipDragPreview(QPainter& painter, int w) {
         painter.drawRect(xStart, laneTop, xEnd - xStart - 1, kLaneHeight - 1);
     }
 
+    // Guide line marking what the drag latched onto, drawn the full height of
+    // the lane area so an alignment across tracks is visible.
+    if (clipDrag_.snapped) {
+        int snapX = xAtFrame(clipDrag_.snapFrame);
+        if (snapX >= kHeaderWidth && snapX <= w) {
+            int lanesBottom = kRulerHeight + static_cast<int>(project_->tracks.size()) * kLaneHeight;
+            painter.setPen(QPen(QColor(255, 214, 0), 1, Qt::DashLine));
+            painter.drawLine(snapX, kRulerHeight, snapX, lanesBottom);
+        }
+    }
+
     int64_t shift = clipDrag_.previewStartFrame - clip->startFrame;
     painter.setPen(wave);
     for (int x = std::max(kHeaderWidth, xStart); x < xEnd; ++x) {
@@ -526,7 +589,15 @@ void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
         const Clip& clip = project_->tracks[static_cast<size_t>(clipDrag_.sourceTrack)]
                                .clips[static_cast<size_t>(clipDrag_.clipIndex)];
         int64_t delta = frameAtX(event->pos().x()) - clipDrag_.grabFrame;
-        clipDrag_.previewStartFrame = std::max<int64_t>(0, clipDrag_.origStartFrame + delta);
+        int64_t rawStart = std::max<int64_t>(0, clipDrag_.origStartFrame + delta);
+
+        clipDrag_.snapped = false;
+        if (event->modifiers() & Qt::AltModifier) {
+            clipDrag_.previewStartFrame = rawStart; // Alt bypasses snapping
+        } else {
+            clipDrag_.previewStartFrame = applySnap(rawStart, clip.frameCount(), &clip,
+                                                     clipDrag_.snapped, clipDrag_.snapFrame);
+        }
 
         int lane = laneIndexAtY(event->pos().y());
         clipDrag_.targetTrack = lane >= 0 ? lane : clipDrag_.sourceTrack;

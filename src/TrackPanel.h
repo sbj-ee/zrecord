@@ -28,6 +28,11 @@ public:
     void setTool(Tool tool);
     Tool tool() const { return tool_; }
 
+    // When on, a dragged clip's nearest edge jumps to nearby clip edges, the
+    // playhead, or zero. Holding Alt during a drag bypasses it.
+    void setSnapEnabled(bool enabled);
+    bool snapEnabled() const { return snapEnabled_; }
+
     // `project` must outlive the TrackPanel or be cleared via setProject(nullptr).
     void setProject(Project* project);
 
@@ -93,6 +98,11 @@ private:
     void drawClipDragPreview(class QPainter& painter, int w);
     // The clip currently being dragged, or nullptr when no drag is in flight.
     const Clip* draggedClip() const;
+    // Returns the start frame `rawStart` should snap to, given a clip of
+    // `clipLength` frames. Whichever of the clip's two edges lands closest to
+    // a target wins. Reports what it snapped to so the drag can draw a guide.
+    int64_t applySnap(int64_t rawStart, int64_t clipLength, const Clip* excludeClip,
+                       bool& snappedOut, int64_t& snapFrameOut) const;
     void drawRuler(class QPainter& painter, int w);
     void updateScrollBarRange();
 
@@ -120,8 +130,12 @@ private:
         int targetTrack = -1;
         int64_t previewStartFrame = 0;
         bool valid = true;          // false when the drop would overlap a clip
+        bool snapped = false;
+        int64_t snapFrame = 0;      // target the drag snapped to, for the guide line
     };
     ClipDrag clipDrag_;
+
+    bool snapEnabled_ = true;
 
     struct LiveCapture {
         int trackIndex = -1;
@@ -134,6 +148,8 @@ private:
     static constexpr int kLaneHeight = 90;
     static constexpr int kScrollBarHeight = 16;
     static constexpr int kMaxLiveColumns = 2000;
+    // Snap radius in pixels, so the feel stays the same at every zoom level.
+    static constexpr int kSnapPixels = 8;
 };
 
 } // namespace zrecord

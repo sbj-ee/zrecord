@@ -100,6 +100,7 @@ private:
     // Mutually exclusive tool selection for the timeline.
     QAction* selectToolAction_ = nullptr;
     QAction* moveToolAction_ = nullptr;
+    QAction* snapAction_ = nullptr;
 
     // Transport/export keep their custom-styled QPushButtons, so these
     // actions exist only to carry the shortcut; their enabled state is kept
