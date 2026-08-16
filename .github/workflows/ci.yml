@@ -31,6 +31,11 @@ jobs:
       - name: Build
         run: cmake --build build -j$(nproc)
 
+      # The suites are GUILESS, so they need no display or audio device.
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
       - name: Package (.deb)
         working-directory: build
         run: cpack -G DEB
