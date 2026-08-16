@@ -1,15 +1,19 @@
 # zrecord
 
-A Qt6 desktop audio recorder for Linux with a live filter chain, voice effects, and export to multiple formats.
+A Qt6 multi-track audio recorder and editor for Linux, with a live input filter chain, voice effects, and export to multiple formats.
 
 ## Features
 
-- Record from any input device via PortAudio, with a big Record/Stop button and live scrolling waveform
+- Multi-track timeline: add/remove tracks, per-track mute/solo/record-arm/gain, zoomable and scrollable
+- Record from any input device via PortAudio onto the armed track, with a big Record/Stop button and a live scrolling waveform while recording
+- Non-destructive editing: click-drag to select a region, then Cut/Copy/Paste/Delete/Silence, all undoable (Undo/Redo)
+- Import existing audio files (WAV, FLAC, OGG, AIFF, ...) onto a track
+- Save/open a project (tracks, clips, and their timeline positions) as a `*.zrproj` folder; reopening restores it exactly
 - Mic input volume control (adjusts the system source volume via PipeWire/PulseAudio)
-- Live filter chain: gain, high-pass, low-pass, noise gate (with attack/release)
+- Live filter chain applied while recording: gain, high-pass, low-pass, noise gate (with attack/release), compressor, limiter
 - Selectable voice effects: Robot Voice, Echo, Deep Voice, Chipmunk, Distortion
-- Playback of the current recording
-- Export to WAV, FLAC, OGG Vorbis, or MP3 (all via libsndfile)
+- Playback of the mixed project from the playhead
+- Export a mixdown to WAV, FLAC, OGG Vorbis, or MP3 (all via libsndfile)
 
 ## Dependencies
 

@@ -4,16 +4,18 @@
 #include <memory>
 
 #include "AudioEngine.h"
-#include "AudioFileWriter.h"
-#include "WaveformView.h"
+#include "Project.h"
+#include "TrackPanel.h"
 
 class QComboBox;
 class QPushButton;
+class QToolButton;
 class QProgressBar;
 class QLabel;
 class QCheckBox;
 class QSlider;
 class QTimer;
+class QUndoStack;
 
 namespace zrecord {
 
@@ -26,19 +28,38 @@ public:
 private slots:
     void onToggleRecord();
     void onTogglePlayback();
-    void onSaveAs();
+    void onExport();
     void onFiltersChanged();
     void onTick();
     void refreshDevices();
     void onMicVolumeChanged(int value);
+
+    void onNewProject();
+    void onOpenProject();
+    void onSaveProject();
+    void onAddTrack();
+    void onRemoveTrack();
+    void onImportAudio();
+
+    void onCut();
+    void onCopy();
+    void onPaste();
+    void onDeleteSelection();
+    void onSilenceSelection();
+    void onSelectionChanged();
 
 private:
     void buildUi();
     void applyFilterSettingsFromUi();
     void setControlsEnabled(bool recording);
     void queryInitialMicVolume();
+    int findArmedTrackIndex() const;
+    bool projectHasAnyContent() const;
 
+    Project project_;
     std::unique_ptr<AudioEngine> engine_;
+    QUndoStack* undoStack_ = nullptr;
+    int recordingArmedTrackIndex_ = -1;
 
     QComboBox* deviceCombo_ = nullptr;
     QComboBox* channelsCombo_ = nullptr;
@@ -50,10 +71,28 @@ private:
 
     QPushButton* recordButton_ = nullptr;
     QPushButton* playButton_ = nullptr;
-    QPushButton* saveButton_ = nullptr;
+    QPushButton* exportButton_ = nullptr;
+
+    QToolButton* newProjectButton_ = nullptr;
+    QToolButton* openProjectButton_ = nullptr;
+    QToolButton* saveProjectButton_ = nullptr;
+    QToolButton* addTrackButton_ = nullptr;
+    QToolButton* removeTrackButton_ = nullptr;
+    QToolButton* importButton_ = nullptr;
+    QToolButton* cutButton_ = nullptr;
+    QToolButton* copyButton_ = nullptr;
+    QToolButton* pasteButton_ = nullptr;
+    QToolButton* deleteButton_ = nullptr;
+    QToolButton* silenceButton_ = nullptr;
+    QToolButton* undoButton_ = nullptr;
+    QToolButton* redoButton_ = nullptr;
+    QToolButton* zoomInButton_ = nullptr;
+    QToolButton* zoomOutButton_ = nullptr;
+    QToolButton* zoomFitButton_ = nullptr;
 
     QProgressBar* levelMeter_ = nullptr;
-    WaveformView* waveformView_ = nullptr;
+    QLabel* statusLabel_ = nullptr;
+    TrackPanel* trackPanel_ = nullptr;
 
     QCheckBox* limiterEnable_ = nullptr;
     QSlider* limiterCeilingSlider_ = nullptr;

@@ -8,9 +8,13 @@
 #include <portaudio.h>
 
 #include "Filters.h"
+#include "Project.h"
 
 namespace zrecord {
 
+// Owns the PortAudio streams. Recording captures into a private scratch
+// buffer (through the live FilterChain) that the caller commits to a track
+// once stopped; playback mixes directly from a Project.
 class AudioEngine {
 public:
     struct DeviceInfo {
@@ -33,7 +37,9 @@ public:
     void stopRecording();
     bool isRecording() const;
 
-    bool startPlayback(std::string& errorMessage);
+    // Plays back `project` from its current playheadFrame. `project` must
+    // outlive the AudioEngine or until stopPlayback() is called.
+    bool startPlayback(Project& project, std::string& errorMessage);
     void stopPlayback();
     bool isPlaying() const;
 
@@ -41,14 +47,15 @@ public:
     FilterSettings filterSettings() const;
 
     float peakLevel() const;
-    double recordedSeconds() const;
-    size_t recordedFrameCount() const;
+    double capturedSeconds() const;
+    size_t capturedFrameCount() const;
 
     int channels() const { return channels_; }
     double sampleRate() const { return sampleRate_; }
 
-    // Returns a copy of the recorded buffer, safe to call any time.
-    std::vector<float> copyRecordedBuffer() const;
+    // Returns a copy of the current capture buffer (the take currently being
+    // or just having been recorded), safe to call any time.
+    std::vector<float> copyCapturedBuffer() const;
 
     // Returns interleaved samples appended since the last call (or since
     // startRecording), for incremental consumers like a live waveform view.
@@ -68,11 +75,13 @@ private:
     PaStream* inputStream_ = nullptr;
     PaStream* outputStream_ = nullptr;
 
-    mutable std::mutex mutex_;
+    mutable std::mutex captureMutex_;
     FilterChain filterChain_;
-    std::vector<float> recordedBuffer_;
-    size_t playbackPos_ = 0;
+    std::vector<float> captureBuffer_;
     size_t consumedOffset_ = 0;
+
+    Project* playbackProject_ = nullptr;
+    size_t playbackPos_ = 0;
 
     std::atomic<float> peakLevel_{0.0f};
     std::atomic<bool> recording_{false};

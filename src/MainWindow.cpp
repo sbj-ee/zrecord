@@ -15,8 +15,16 @@
 #include <QRegularExpression>
 #include <QSlider>
 #include <QTimer>
+#include <QToolButton>
+#include <QUndoStack>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <algorithm>
+
+#include "AudioFileReader.h"
+#include "AudioFileWriter.h"
+#include "Commands.h"
+#include "ProjectFile.h"
 
 namespace zrecord {
 
@@ -35,11 +43,13 @@ QString formatDuration(double seconds) {
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     engine_ = std::make_unique<AudioEngine>();
+    undoStack_ = new QUndoStack(this);
     buildUi();
     refreshDevices();
     applyFilterSettingsFromUi();
     setControlsEnabled(false);
     queryInitialMicVolume();
+    onSelectionChanged();
 
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, &MainWindow::onTick);
@@ -88,6 +98,59 @@ void MainWindow::buildUi() {
     rootLayout->addLayout(micRow);
     connect(micVolumeSlider_, &QSlider::valueChanged, this, &MainWindow::onMicVolumeChanged);
 
+    // Project toolbar: file ops, add/remove track, import, edit, undo/redo, zoom.
+    auto* toolbarRow = new QHBoxLayout();
+    auto addTool = [&](const QString& text, const QString& tip) {
+        auto* button = new QToolButton();
+        button->setText(text);
+        button->setToolTip(tip);
+        toolbarRow->addWidget(button);
+        return button;
+    };
+    newProjectButton_ = addTool("New", "New project");
+    openProjectButton_ = addTool("Open...", "Open project");
+    saveProjectButton_ = addTool("Save...", "Save project");
+    toolbarRow->addSpacing(12);
+    addTrackButton_ = addTool("+Track", "Add track");
+    removeTrackButton_ = addTool("-Track", "Remove selected (or last) track");
+    importButton_ = addTool("Import...", "Import audio file into selected track");
+    toolbarRow->addSpacing(12);
+    cutButton_ = addTool("Cut", "Cut selection");
+    copyButton_ = addTool("Copy", "Copy selection");
+    pasteButton_ = addTool("Paste", "Paste at playhead");
+    deleteButton_ = addTool("Delete", "Delete selection");
+    silenceButton_ = addTool("Silence", "Silence selection");
+    toolbarRow->addSpacing(12);
+    undoButton_ = addTool("Undo", "Undo");
+    redoButton_ = addTool("Redo", "Redo");
+    toolbarRow->addSpacing(12);
+    zoomInButton_ = addTool("Zoom In", "Zoom in");
+    zoomOutButton_ = addTool("Zoom Out", "Zoom out");
+    zoomFitButton_ = addTool("Zoom Fit", "Zoom to fit whole project");
+    toolbarRow->addStretch();
+    rootLayout->addLayout(toolbarRow);
+
+    connect(newProjectButton_, &QToolButton::clicked, this, &MainWindow::onNewProject);
+    connect(openProjectButton_, &QToolButton::clicked, this, &MainWindow::onOpenProject);
+    connect(saveProjectButton_, &QToolButton::clicked, this, &MainWindow::onSaveProject);
+    connect(addTrackButton_, &QToolButton::clicked, this, &MainWindow::onAddTrack);
+    connect(removeTrackButton_, &QToolButton::clicked, this, &MainWindow::onRemoveTrack);
+    connect(importButton_, &QToolButton::clicked, this, &MainWindow::onImportAudio);
+    connect(cutButton_, &QToolButton::clicked, this, &MainWindow::onCut);
+    connect(copyButton_, &QToolButton::clicked, this, &MainWindow::onCopy);
+    connect(pasteButton_, &QToolButton::clicked, this, &MainWindow::onPaste);
+    connect(deleteButton_, &QToolButton::clicked, this, &MainWindow::onDeleteSelection);
+    connect(silenceButton_, &QToolButton::clicked, this, &MainWindow::onSilenceSelection);
+    connect(undoButton_, &QToolButton::clicked, undoStack_, &QUndoStack::undo);
+    connect(redoButton_, &QToolButton::clicked, undoStack_, &QUndoStack::redo);
+    connect(undoStack_, &QUndoStack::canUndoChanged, undoButton_, &QToolButton::setEnabled);
+    connect(undoStack_, &QUndoStack::canRedoChanged, redoButton_, &QToolButton::setEnabled);
+    connect(undoStack_, &QUndoStack::indexChanged, this, [this](int) {
+        trackPanel_->refresh();
+    });
+    undoButton_->setEnabled(false);
+    redoButton_->setEnabled(false);
+
     // Big red record/stop button.
     recordButton_ = new QPushButton("●  RECORD");
     recordButton_->setMinimumHeight(90);
@@ -112,23 +175,32 @@ void MainWindow::buildUi() {
     recordRow->addStretch();
     rootLayout->addLayout(recordRow);
 
-    // Level meter + status.
+    // Level meter + track timeline.
+    auto* meterRow = new QHBoxLayout();
     levelMeter_ = new QProgressBar();
     levelMeter_->setRange(0, 100);
     levelMeter_->setTextVisible(false);
-    rootLayout->addWidget(levelMeter_);
+    meterRow->addWidget(levelMeter_, 1);
+    statusLabel_ = new QLabel("Ready");
+    meterRow->addWidget(statusLabel_);
+    rootLayout->addLayout(meterRow);
 
-    waveformView_ = new WaveformView();
-    waveformView_->setStatusText("Ready");
-    rootLayout->addWidget(waveformView_);
+    trackPanel_ = new TrackPanel();
+    trackPanel_->setProject(&project_);
+    trackPanel_->setMinimumHeight(260);
+    rootLayout->addWidget(trackPanel_, 1);
+    connect(trackPanel_, &TrackPanel::selectionChanged, this, &MainWindow::onSelectionChanged);
+    connect(zoomInButton_, &QToolButton::clicked, trackPanel_, &TrackPanel::zoomIn);
+    connect(zoomOutButton_, &QToolButton::clicked, trackPanel_, &TrackPanel::zoomOut);
+    connect(zoomFitButton_, &QToolButton::clicked, trackPanel_, &TrackPanel::zoomToFit);
 
-    // Playback / save row.
+    // Playback / export row.
     auto* secondaryRow = new QHBoxLayout();
     playButton_ = new QPushButton("▶  Play");
     connect(playButton_, &QPushButton::clicked, this, &MainWindow::onTogglePlayback);
     secondaryRow->addWidget(playButton_);
 
-    secondaryRow->addWidget(new QLabel("Save as:"));
+    secondaryRow->addWidget(new QLabel("Export as:"));
     formatCombo_ = new QComboBox();
     formatCombo_->addItem(AudioFileWriter::nameFor(AudioFormat::Wav), static_cast<int>(AudioFormat::Wav));
     formatCombo_->addItem(AudioFileWriter::nameFor(AudioFormat::Flac), static_cast<int>(AudioFormat::Flac));
@@ -136,14 +208,14 @@ void MainWindow::buildUi() {
     formatCombo_->addItem(AudioFileWriter::nameFor(AudioFormat::Mp3), static_cast<int>(AudioFormat::Mp3));
     secondaryRow->addWidget(formatCombo_);
 
-    saveButton_ = new QPushButton("Save As...");
-    connect(saveButton_, &QPushButton::clicked, this, &MainWindow::onSaveAs);
-    secondaryRow->addWidget(saveButton_);
+    exportButton_ = new QPushButton("Export Mixdown...");
+    connect(exportButton_, &QPushButton::clicked, this, &MainWindow::onExport);
+    secondaryRow->addWidget(exportButton_);
 
     rootLayout->addLayout(secondaryRow);
 
-    // Filters panel.
-    auto* filterGroup = new QGroupBox("Filters");
+    // Filters panel: applied live to the armed track's input while recording.
+    auto* filterGroup = new QGroupBox("Record Input Filters");
     auto* grid = new QGridLayout(filterGroup);
 
     limiterEnable_ = new QCheckBox("Limiter (prevent clipping)");
@@ -254,7 +326,7 @@ void MainWindow::buildUi() {
     connect(voiceEffectCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onFiltersChanged);
 
     setCentralWidget(central);
-    resize(560, 620);
+    resize(900, 820);
 }
 
 void MainWindow::queryInitialMicVolume() {
@@ -333,11 +405,31 @@ void MainWindow::onFiltersChanged() {
 
 void MainWindow::setControlsEnabled(bool recording) {
     deviceCombo_->setEnabled(!recording);
-    channelsCombo_->setEnabled(!recording);
-    sampleRateCombo_->setEnabled(!recording);
-    saveButton_->setEnabled(!recording);
+    exportButton_->setEnabled(!recording);
     playButton_->setEnabled(!recording);
     formatCombo_->setEnabled(!recording);
+
+    bool hasContent = projectHasAnyContent();
+    channelsCombo_->setEnabled(!recording && !hasContent);
+    sampleRateCombo_->setEnabled(!recording && !hasContent);
+}
+
+int MainWindow::findArmedTrackIndex() const {
+    for (size_t i = 0; i < project_.tracks.size(); ++i) {
+        if (project_.tracks[i].recordArmed) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool MainWindow::projectHasAnyContent() const {
+    for (const auto& track : project_.tracks) {
+        if (!track.clips.empty()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void MainWindow::onToggleRecord() {
@@ -346,12 +438,32 @@ void MainWindow::onToggleRecord() {
             QMessageBox::warning(this, "No input device", "No input device is available.");
             return;
         }
+
+        int armedIndex = findArmedTrackIndex();
+        if (armedIndex < 0) {
+            if (project_.tracks.empty()) {
+                undoStack_->push(new AddTrackCommand(project_, "Track 1"));
+                trackPanel_->refresh();
+                armedIndex = 0;
+                project_.tracks[0].recordArmed = true;
+                trackPanel_->refresh();
+            } else {
+                QMessageBox::information(this, "No track armed",
+                                          "Arm a track for recording first (the ● button in its header).");
+                return;
+            }
+        }
+
+        if (!projectHasAnyContent()) {
+            project_.sampleRate = sampleRateCombo_->currentData().toDouble();
+            project_.channels = channelsCombo_->currentData().toInt();
+        }
+
+        recordingArmedTrackIndex_ = armedIndex;
         int deviceIndex = deviceCombo_->currentData().toInt();
-        int channels = channelsCombo_->currentData().toInt();
-        double sampleRate = sampleRateCombo_->currentData().toDouble();
 
         std::string error;
-        if (engine_->startRecording(deviceIndex, channels, sampleRate, error)) {
+        if (engine_->startRecording(deviceIndex, project_.channels, project_.sampleRate, error)) {
             recordButton_->setText("■  STOP");
             recordButton_->setStyleSheet(
                 "QPushButton {"
@@ -365,13 +477,22 @@ void MainWindow::onToggleRecord() {
                 "QPushButton:hover { background-color: #ff4569; }"
                 "QPushButton:pressed { background-color: #c4001d; }");
             setControlsEnabled(true);
-            waveformView_->clear();
-            waveformView_->setStatusText("Recording... 00:00:00");
+            trackPanel_->beginLiveCapture(armedIndex);
         } else {
             QMessageBox::warning(this, "Recording failed", QString::fromStdString(error));
         }
     } else {
         engine_->stopRecording();
+        std::vector<float> captured = engine_->copyCapturedBuffer();
+        trackPanel_->endLiveCapture();
+
+        if (!captured.empty() && recordingArmedTrackIndex_ >= 0) {
+            undoStack_->push(new AppendClipCommand(project_, recordingArmedTrackIndex_, captured, project_.channels, "Record"));
+        }
+        recordingArmedTrackIndex_ = -1;
+        trackPanel_->refresh();
+        statusLabel_->setText("Stopped");
+
         recordButton_->setText("●  RECORD");
         recordButton_->setStyleSheet(
             "QPushButton {"
@@ -385,14 +506,13 @@ void MainWindow::onToggleRecord() {
             "QPushButton:hover { background-color: #e53935; }"
             "QPushButton:pressed { background-color: #b71c1c; }");
         setControlsEnabled(false);
-        waveformView_->setStatusText(QString("Stopped - %1 recorded").arg(formatDuration(engine_->recordedSeconds())));
     }
 }
 
 void MainWindow::onTogglePlayback() {
     if (!engine_->isPlaying()) {
         std::string error;
-        if (engine_->startPlayback(error)) {
+        if (engine_->startPlayback(project_, error)) {
             playButton_->setText("■  Stop");
         } else {
             QMessageBox::warning(this, "Playback failed", QString::fromStdString(error));
@@ -403,30 +523,186 @@ void MainWindow::onTogglePlayback() {
     }
 }
 
-void MainWindow::onSaveAs() {
-    std::vector<float> buffer = engine_->copyRecordedBuffer();
+void MainWindow::onExport() {
+    std::vector<float> buffer = project_.renderMixdown();
     if (buffer.empty()) {
-        QMessageBox::information(this, "Nothing to save", "Record something first.");
+        QMessageBox::information(this, "Nothing to export", "Record or import something first.");
         return;
     }
 
     auto format = static_cast<AudioFormat>(formatCombo_->currentData().toInt());
     QString ext = AudioFileWriter::extensionFor(format);
-    QString defaultPath = QDir::homePath() + "/recording." + ext;
-    QString path = QFileDialog::getSaveFileName(this, "Save Recording", defaultPath,
-                                                 QString("*.%1").arg(ext));
+    QString defaultPath = QDir::homePath() + "/mixdown." + ext;
+    QString path = QFileDialog::getSaveFileName(this, "Export Mixdown", defaultPath, QString("*.%1").arg(ext));
     if (path.isEmpty()) {
         return;
     }
 
     std::string error;
-    bool ok = AudioFileWriter::write(path.toStdString(), buffer, static_cast<int>(engine_->sampleRate()),
-                                      engine_->channels(), format, error);
+    bool ok = AudioFileWriter::write(path.toStdString(), buffer, static_cast<int>(project_.sampleRate),
+                                      project_.channels, format, error);
     if (ok) {
-        QMessageBox::information(this, "Saved", "Recording saved to:\n" + path);
+        QMessageBox::information(this, "Exported", "Mixdown exported to:\n" + path);
     } else {
-        QMessageBox::warning(this, "Save failed", QString::fromStdString(error));
+        QMessageBox::warning(this, "Export failed", QString::fromStdString(error));
     }
+}
+
+void MainWindow::onNewProject() {
+    if (undoStack_->count() > 0) {
+        auto reply = QMessageBox::question(this, "New Project", "Discard the current project and start a new one?");
+        if (reply != QMessageBox::Yes) {
+            return;
+        }
+    }
+    project_.reset();
+    undoStack_->clear();
+    trackPanel_->refresh();
+    setControlsEnabled(false);
+}
+
+void MainWindow::onOpenProject() {
+    QString dirPath = QFileDialog::getExistingDirectory(this, "Open Project (select a .zrproj folder)", QDir::homePath());
+    if (dirPath.isEmpty()) {
+        return;
+    }
+    std::string error;
+    if (!ProjectFile::load(project_, dirPath.toStdString(), error)) {
+        QMessageBox::warning(this, "Open failed", QString::fromStdString(error));
+        return;
+    }
+    undoStack_->clear();
+    trackPanel_->refresh();
+    trackPanel_->zoomToFit();
+    setControlsEnabled(false);
+}
+
+void MainWindow::onSaveProject() {
+    QString defaultPath = QDir::homePath() + "/untitled.zrproj";
+    QString path = QFileDialog::getSaveFileName(this, "Save Project", defaultPath, "zrecord Project (*.zrproj)");
+    if (path.isEmpty()) {
+        return;
+    }
+    if (!path.endsWith(".zrproj")) {
+        path += ".zrproj";
+    }
+    std::string error;
+    if (!ProjectFile::save(project_, path.toStdString(), error)) {
+        QMessageBox::warning(this, "Save failed", QString::fromStdString(error));
+        return;
+    }
+    QMessageBox::information(this, "Saved", "Project saved to:\n" + path);
+}
+
+void MainWindow::onAddTrack() {
+    int n = static_cast<int>(project_.tracks.size()) + 1;
+    undoStack_->push(new AddTrackCommand(project_, "Track " + std::to_string(n)));
+    trackPanel_->refresh();
+}
+
+void MainWindow::onRemoveTrack() {
+    if (project_.tracks.empty()) {
+        return;
+    }
+    int index = project_.selection.trackIndex >= 0 ? project_.selection.trackIndex
+                                                    : static_cast<int>(project_.tracks.size()) - 1;
+    undoStack_->push(new RemoveTrackCommand(project_, index));
+    trackPanel_->refresh();
+}
+
+void MainWindow::onImportAudio() {
+    QString path = QFileDialog::getOpenFileName(this, "Import Audio", QDir::homePath(),
+                                                 "Audio Files (*.wav *.flac *.ogg *.aiff *.aif)");
+    if (path.isEmpty()) {
+        return;
+    }
+
+    std::vector<float> samples;
+    int sampleRate = 0;
+    int channels = 0;
+    std::string error;
+    if (!AudioFileReader::read(path.toStdString(), samples, sampleRate, channels, error)) {
+        QMessageBox::warning(this, "Import failed", QString::fromStdString(error));
+        return;
+    }
+
+    if (project_.tracks.empty()) {
+        undoStack_->push(new AddTrackCommand(project_, "Imported"));
+        trackPanel_->refresh();
+    }
+
+    if (!projectHasAnyContent()) {
+        project_.sampleRate = sampleRate;
+        project_.channels = channels;
+    } else if (channels != project_.channels) {
+        QMessageBox::warning(this, "Channel mismatch",
+                              QString("This project is %1-channel; the imported file is %2-channel.")
+                                  .arg(project_.channels)
+                                  .arg(channels));
+        return;
+    }
+
+    int trackIndex = project_.selection.trackIndex >= 0 ? project_.selection.trackIndex
+                                                          : static_cast<int>(project_.tracks.size()) - 1;
+    undoStack_->push(new AppendClipCommand(project_, trackIndex, samples, channels, "Import"));
+    trackPanel_->refresh();
+}
+
+void MainWindow::onCut() {
+    if (project_.selection.isEmpty()) {
+        return;
+    }
+    onCopy();
+    const Selection sel = project_.selection;
+    undoStack_->push(new DeleteSelectionCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame));
+    trackPanel_->refresh();
+}
+
+void MainWindow::onCopy() {
+    if (project_.selection.isEmpty()) {
+        return;
+    }
+    const Selection sel = project_.selection;
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.clipboard = Project::copyRange(project_.tracks[static_cast<size_t>(sel.trackIndex)],
+                                             sel.startFrame, sel.endFrame, project_.channels);
+    pasteButton_->setEnabled(!project_.clipboard.empty());
+}
+
+void MainWindow::onPaste() {
+    if (project_.clipboard.empty() || project_.tracks.empty()) {
+        return;
+    }
+    int trackIndex = project_.selection.trackIndex >= 0 ? project_.selection.trackIndex : 0;
+    undoStack_->push(new PasteCommand(project_, trackIndex, project_.playheadFrame, project_.clipboard, project_.channels));
+    trackPanel_->refresh();
+}
+
+void MainWindow::onDeleteSelection() {
+    if (project_.selection.isEmpty()) {
+        return;
+    }
+    const Selection sel = project_.selection;
+    undoStack_->push(new DeleteSelectionCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame));
+    trackPanel_->refresh();
+}
+
+void MainWindow::onSilenceSelection() {
+    if (project_.selection.isEmpty()) {
+        return;
+    }
+    const Selection sel = project_.selection;
+    undoStack_->push(new SilenceSelectionCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame));
+    trackPanel_->refresh();
+}
+
+void MainWindow::onSelectionChanged() {
+    bool hasSelection = !project_.selection.isEmpty();
+    cutButton_->setEnabled(hasSelection);
+    copyButton_->setEnabled(hasSelection);
+    deleteButton_->setEnabled(hasSelection);
+    silenceButton_->setEnabled(hasSelection);
+    pasteButton_->setEnabled(!project_.clipboard.empty());
 }
 
 void MainWindow::onTick() {
@@ -434,7 +710,7 @@ void MainWindow::onTick() {
     levelMeter_->setValue(static_cast<int>(std::min(1.0f, peak) * 100.0f));
 
     if (engine_->isRecording()) {
-        waveformView_->setStatusText(QString("Recording... %1").arg(formatDuration(engine_->recordedSeconds())));
+        statusLabel_->setText(QString("Recording... %1").arg(formatDuration(engine_->capturedSeconds())));
 
         std::vector<float> newSamples = engine_->consumeNewSamples();
         if (!newSamples.empty()) {
@@ -444,7 +720,7 @@ void MainWindow::onTick() {
                 minVal = std::min(minVal, sample);
                 maxVal = std::max(maxVal, sample);
             }
-            waveformView_->pushColumn(minVal, maxVal);
+            trackPanel_->pushLiveColumn(minVal, maxVal);
         }
     }
 

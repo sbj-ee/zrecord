@@ -18,7 +18,11 @@ add_executable(zrecord
     src/AudioEngine.cpp
     src/Filters.cpp
     src/AudioFileWriter.cpp
-    src/WaveformView.cpp
+    src/AudioFileReader.cpp
+    src/Project.cpp
+    src/Commands.cpp
+    src/TrackPanel.cpp
+    src/ProjectFile.cpp
 )
 
 target_link_libraries(zrecord PRIVATE
@@ -33,7 +37,7 @@ install(FILES packaging/zrecord.desktop DESTINATION share/applications)
 set(CPACK_PACKAGE_NAME "zrecord")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_CONTACT "stevebj.ee@gmail.com")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Qt6 audio recorder with live filters and voice effects")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Qt6 multi-track audio recorder/editor with live filters and voice effects")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "stevebj.ee@gmail.com")
 set(CPACK_DEBIAN_PACKAGE_SECTION "sound")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS YES)

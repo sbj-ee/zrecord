@@ -1,0 +1,125 @@
+#pragma once
+
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <vector>
+
+namespace zrecord {
+
+// Lazily-built min/max mipmap for one clip's samples, so the timeline can
+// paint zoomed-out waveforms without rescanning every raw sample per frame.
+class PeakCache {
+public:
+    static constexpr int64_t kBlockFrames = 256;
+
+    // (Re)builds the cache from `samples` (interleaved, `channels` wide).
+    void build(const std::vector<float>& samples, int channels);
+    void invalidate();
+
+    struct MinMax {
+        float minValue = 0.0f;
+        float maxValue = 0.0f;
+    };
+
+    // Peak of frame block `blockIndex` (covering
+    // [blockIndex*kBlockFrames, (blockIndex+1)*kBlockFrames) ). Valid only
+    // after build().
+    MinMax blockAt(int64_t blockIndex) const;
+    int64_t blockCount() const { return static_cast<int64_t>(blocks_.size()); }
+    bool isBuilt() const { return built_; }
+
+private:
+    std::vector<MinMax> blocks_;
+    bool built_ = false;
+};
+
+// One contiguous span of recorded/imported audio, placed on a track's
+// timeline at startFrame. Clips own their samples in memory (matching the
+// original single-buffer design, just split per-clip).
+struct Clip {
+    std::vector<float> samples; // interleaved, `channels` wide
+    int64_t startFrame = 0;
+    int channels = 1;
+    PeakCache peaks;
+
+    int64_t frameCount() const {
+        return channels > 0 ? static_cast<int64_t>(samples.size()) / channels : 0;
+    }
+    int64_t endFrame() const { return startFrame + frameCount(); }
+};
+
+struct Track {
+    std::string name;
+    std::vector<Clip> clips; // kept sorted by startFrame, non-overlapping
+    bool muted = false;
+    bool soloed = false;
+    bool recordArmed = false;
+    double gainDb = 0.0;
+
+    int64_t endFrame() const;
+};
+
+struct Selection {
+    int trackIndex = -1;
+    int64_t startFrame = 0;
+    int64_t endFrame = 0;
+
+    bool isEmpty() const { return trackIndex < 0 || startFrame >= endFrame; }
+    void clear() { trackIndex = -1; startFrame = 0; endFrame = 0; }
+};
+
+// The full editable document: a set of tracks sharing one sample rate and
+// channel count, a selection, and a playhead. `mutex` guards `tracks` since
+// it is read from the PortAudio playback callback thread while being
+// mutated from the UI thread by undo commands.
+class Project {
+public:
+    mutable std::mutex mutex;
+
+    double sampleRate = 44100.0;
+    int channels = 2;
+    std::vector<Track> tracks;
+    Selection selection;
+    int64_t playheadFrame = 0;
+    std::vector<float> clipboard; // interleaved, `channels` wide
+
+    int64_t lengthFrames() const;
+
+    // Resets to an empty single project in place (Project holds a mutex, so
+    // it cannot be copy/move-assigned wholesale).
+    void reset();
+
+    // Splits the clip covering `frame` on `track` into two at that frame, if
+    // `frame` falls strictly inside a clip. No-op otherwise.
+    static void splitClipAt(Track& track, int64_t frame, int channels);
+
+    // Removes [startFrame, endFrame) from `track`, rippling later clips left
+    // by the removed length. Returns the removed audio (silence-filled where
+    // no clip covered a gap).
+    static std::vector<float> removeRange(Track& track, int64_t startFrame, int64_t endFrame, int channels);
+
+    // Inserts `samples` at `atFrame` on `track`, rippling later clips right.
+    static void insertRange(Track& track, int64_t atFrame, const std::vector<float>& samples, int channels);
+
+    // Zeroes [startFrame, endFrame) in place; track length is unchanged.
+    static void silenceRange(Track& track, int64_t startFrame, int64_t endFrame, int channels);
+
+    // Reads [startFrame, endFrame) from `track` without modifying it
+    // (silence-filled where no clip covers a gap). Used by Copy.
+    static std::vector<float> copyRange(const Track& track, int64_t startFrame, int64_t endFrame, int channels);
+
+    // Appends `samples` as a new clip at the track's current end.
+    static void appendClip(Track& track, const std::vector<float>& samples, int channels);
+
+    // Mixes all audible tracks (soloed tracks only, if any are soloed;
+    // otherwise all unmuted tracks) over [startFrame, startFrame+frameCount)
+    // into `out`, which must already be sized frameCount*channels and will
+    // be overwritten (not accumulated into). Caller must hold `mutex`.
+    void readMix(int64_t startFrame, int64_t frameCount, std::vector<float>& out) const;
+
+    // Renders the whole project to one interleaved buffer, for export.
+    std::vector<float> renderMixdown() const;
+};
+
+} // namespace zrecord

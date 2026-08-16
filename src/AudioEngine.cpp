@@ -46,9 +46,9 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
     sampleRate_ = sampleRate;
 
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(captureMutex_);
         filterChain_.prepare(sampleRate_, channels_);
-        recordedBuffer_.clear();
+        captureBuffer_.clear();
         consumedOffset_ = 0;
     }
 
@@ -95,19 +95,18 @@ bool AudioEngine::isRecording() const {
     return recording_.load();
 }
 
-bool AudioEngine::startPlayback(std::string& errorMessage) {
+bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
     if (isPlaying()) {
         errorMessage = "Already playing";
         return false;
     }
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (recordedBuffer_.empty()) {
-            errorMessage = "Nothing recorded yet";
-            return false;
-        }
-        playbackPos_ = 0;
+    if (project.lengthFrames() <= 0) {
+        errorMessage = "Nothing to play";
+        return false;
     }
+
+    playbackProject_ = &project;
+    playbackPos_ = static_cast<size_t>(std::max<int64_t>(0, project.playheadFrame));
 
     PaStreamParameters outputParams{};
     outputParams.device = Pa_GetDefaultOutputDevice();
@@ -115,18 +114,19 @@ bool AudioEngine::startPlayback(std::string& errorMessage) {
         errorMessage = "No default output device available";
         return false;
     }
-    outputParams.channelCount = channels_;
+    outputParams.channelCount = project.channels;
     outputParams.sampleFormat = paFloat32;
     const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(outputParams.device);
     outputParams.suggestedLatency = devInfo != nullptr ? devInfo->defaultLowOutputLatency : 0.05;
     outputParams.hostApiSpecificStreamInfo = nullptr;
 
-    PaError err = Pa_OpenStream(&outputStream_, nullptr, &outputParams, sampleRate_,
+    PaError err = Pa_OpenStream(&outputStream_, nullptr, &outputParams, project.sampleRate,
                                  paFramesPerBufferUnspecified, paNoFlag,
                                  &AudioEngine::outputCallbackStatic, this);
     if (err != paNoError) {
         errorMessage = Pa_GetErrorText(err);
         outputStream_ = nullptr;
+        playbackProject_ = nullptr;
         return false;
     }
 
@@ -135,6 +135,7 @@ bool AudioEngine::startPlayback(std::string& errorMessage) {
         errorMessage = Pa_GetErrorText(err);
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
+        playbackProject_ = nullptr;
         return false;
     }
     return true;
@@ -146,6 +147,10 @@ void AudioEngine::stopPlayback() {
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
     }
+    if (playbackProject_ != nullptr) {
+        playbackProject_->playheadFrame = static_cast<int64_t>(playbackPos_);
+        playbackProject_ = nullptr;
+    }
 }
 
 bool AudioEngine::isPlaying() const {
@@ -156,12 +161,12 @@ bool AudioEngine::isPlaying() const {
 }
 
 void AudioEngine::setFilterSettings(const FilterSettings& settings) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(captureMutex_);
     filterChain_.setSettings(settings);
 }
 
 FilterSettings AudioEngine::filterSettings() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(captureMutex_);
     return filterChain_.settings();
 }
 
@@ -169,28 +174,28 @@ float AudioEngine::peakLevel() const {
     return peakLevel_.load(std::memory_order_relaxed);
 }
 
-double AudioEngine::recordedSeconds() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+double AudioEngine::capturedSeconds() const {
+    std::lock_guard<std::mutex> lock(captureMutex_);
     if (channels_ <= 0 || sampleRate_ <= 0.0) {
         return 0.0;
     }
-    return static_cast<double>(recordedBuffer_.size()) / (channels_ * sampleRate_);
+    return static_cast<double>(captureBuffer_.size()) / (channels_ * sampleRate_);
 }
 
-size_t AudioEngine::recordedFrameCount() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return channels_ > 0 ? recordedBuffer_.size() / static_cast<size_t>(channels_) : 0;
+size_t AudioEngine::capturedFrameCount() const {
+    std::lock_guard<std::mutex> lock(captureMutex_);
+    return channels_ > 0 ? captureBuffer_.size() / static_cast<size_t>(channels_) : 0;
 }
 
-std::vector<float> AudioEngine::copyRecordedBuffer() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return recordedBuffer_;
+std::vector<float> AudioEngine::copyCapturedBuffer() const {
+    std::lock_guard<std::mutex> lock(captureMutex_);
+    return captureBuffer_;
 }
 
 std::vector<float> AudioEngine::consumeNewSamples() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<float> result(recordedBuffer_.begin() + static_cast<long>(consumedOffset_), recordedBuffer_.end());
-    consumedOffset_ = recordedBuffer_.size();
+    std::lock_guard<std::mutex> lock(captureMutex_);
+    std::vector<float> result(captureBuffer_.begin() + static_cast<long>(consumedOffset_), captureBuffer_.end());
+    consumedOffset_ = captureBuffer_.size();
     return result;
 }
 
@@ -220,9 +225,9 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(captureMutex_);
         filterChain_.process(block, frameCount);
-        recordedBuffer_.insert(recordedBuffer_.end(), block.begin(), block.end());
+        captureBuffer_.insert(captureBuffer_.end(), block.begin(), block.end());
     }
 
     peakLevel_.store(peak, std::memory_order_relaxed);
@@ -230,23 +235,22 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
 }
 
 int AudioEngine::handleOutput(float* output, unsigned long frameCount) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    size_t framesAvailable = channels_ > 0 ? recordedBuffer_.size() / static_cast<size_t>(channels_) : 0;
-    size_t framesRemaining = playbackPos_ < framesAvailable ? framesAvailable - playbackPos_ : 0;
-    size_t framesToCopy = std::min<size_t>(frameCount, framesRemaining);
-
-    if (framesToCopy > 0) {
-        const float* src = recordedBuffer_.data() + playbackPos_ * static_cast<size_t>(channels_);
-        std::copy(src, src + framesToCopy * static_cast<size_t>(channels_), output);
-    }
-    if (framesToCopy < frameCount) {
-        std::fill(output + framesToCopy * static_cast<size_t>(channels_),
-                  output + static_cast<size_t>(frameCount) * static_cast<size_t>(channels_), 0.0f);
+    if (playbackProject_ == nullptr) {
+        std::fill(output, output + frameCount * static_cast<unsigned long>(channels_), 0.0f);
+        return paComplete;
     }
 
-    playbackPos_ += framesToCopy;
-    return framesToCopy < frameCount ? paComplete : paContinue;
+    Project& project = *playbackProject_;
+    std::vector<float> mix(static_cast<size_t>(frameCount) * static_cast<size_t>(project.channels), 0.0f);
+    {
+        std::lock_guard<std::mutex> lock(project.mutex);
+        project.readMix(static_cast<int64_t>(playbackPos_), static_cast<int64_t>(frameCount), mix);
+    }
+    std::copy(mix.begin(), mix.end(), output);
+
+    playbackPos_ += frameCount;
+    bool reachedEnd = static_cast<int64_t>(playbackPos_) >= project.lengthFrames();
+    return reachedEnd ? paComplete : paContinue;
 }
 
 } // namespace zrecord

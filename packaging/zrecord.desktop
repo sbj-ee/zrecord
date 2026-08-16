@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=zrecord
-Comment=Audio recorder with live filters and voice effects
+Comment=Multi-track audio recorder/editor with live filters and voice effects
 Exec=zrecord
 Icon=audio-input-microphone
 Terminal=false
