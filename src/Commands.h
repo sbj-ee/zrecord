@@ -83,6 +83,24 @@ private:
     int channels_;
 };
 
+// Ramps the selection from silence to unity, or unity to silence, in place.
+// Same read-process-write shape as ApplyEffectCommand, but the ramp is
+// positioned across the selection rather than driven by the filter panel.
+class FadeCommand : public TrackEditCommand {
+public:
+    FadeCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,
+                 FadeShape shape, int channels);
+
+protected:
+    void apply() override;
+
+private:
+    int64_t startFrame_;
+    int64_t endFrame_;
+    FadeShape shape_;
+    int channels_;
+};
+
 // Inserts audio at a given frame, rippling later clips right. Used for
 // pasting the clipboard.
 class PasteCommand : public TrackEditCommand {

@@ -188,4 +188,13 @@ private:
     void reconfigureFilters();
 };
 
+enum class FadeShape { In, Out };
+
+// Applies a linear gain ramp across the whole of `interleaved` in place
+// (silence -> unity for In, unity -> silence for Out). Unlike the classes
+// above this is a one-shot buffer operation, not a streaming filter: the ramp
+// is positioned relative to the buffer's own length, so the caller passes
+// exactly the span it wants faded.
+void applyLinearFade(std::vector<float>& interleaved, int channels, FadeShape shape);
+
 } // namespace zrecord
