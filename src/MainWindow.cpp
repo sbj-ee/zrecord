@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -123,6 +124,19 @@ void MainWindow::buildUi() {
         toolbarRow->addWidget(button);
         return action;
     };
+    // Tool picker: Select drags out a time range, Move time-shifts clips.
+    // F1/F5 match Audacity's bindings for the same two tools.
+    selectToolAction_ = addTool("Select", "Select a time range", QKeySequence("F1"));
+    moveToolAction_ = addTool("Move", "Drag clips along the timeline and between tracks", QKeySequence("F5"));
+    selectToolAction_->setCheckable(true);
+    moveToolAction_->setCheckable(true);
+    selectToolAction_->setChecked(true);
+    auto* toolGroup = new QActionGroup(this);
+    toolGroup->setExclusive(true);
+    toolGroup->addAction(selectToolAction_);
+    toolGroup->addAction(moveToolAction_);
+    toolbarRow->addSpacing(12);
+
     newProjectAction_ = addTool("New", "New project", QKeySequence::New);
     openProjectAction_ = addTool("Open...", "Open project", QKeySequence::Open);
     saveProjectAction_ = addTool("Save...", "Save project", QKeySequence::Save);
@@ -244,6 +258,13 @@ void MainWindow::buildUi() {
     trackPanel_->setMinimumHeight(260);
     rootLayout->addWidget(trackPanel_, 1);
     connect(trackPanel_, &TrackPanel::selectionChanged, this, &MainWindow::onSelectionChanged);
+    connect(trackPanel_, &TrackPanel::clipMoveRequested, this, &MainWindow::onClipMoveRequested);
+    connect(selectToolAction_, &QAction::triggered, this, [this] {
+        trackPanel_->setTool(TrackPanel::Tool::Select);
+    });
+    connect(moveToolAction_, &QAction::triggered, this, [this] {
+        trackPanel_->setTool(TrackPanel::Tool::Move);
+    });
     connect(zoomInAction_, &QAction::triggered, trackPanel_, &TrackPanel::zoomIn);
     connect(zoomOutAction_, &QAction::triggered, trackPanel_, &TrackPanel::zoomOut);
     connect(zoomFitAction_, &QAction::triggered, trackPanel_, &TrackPanel::zoomToFit);
@@ -810,6 +831,13 @@ void MainWindow::onApplyEffect() {
     undoStack_->push(new ApplyEffectCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame,
                                              filterSettingsFromUi(), project_.sampleRate, project_.channels));
     trackPanel_->refresh();
+}
+
+void MainWindow::onClipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame) {
+    undoStack_->push(new MoveClipCommand(project_, fromTrack, clipIndex, toTrack,
+                                          static_cast<int64_t>(newStartFrame)));
+    trackPanel_->refresh();
+    onSelectionChanged(); // the move clears the selection
 }
 
 void MainWindow::onSelectionChanged() {

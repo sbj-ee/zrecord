@@ -1,5 +1,7 @@
 #include "Commands.h"
 
+#include <algorithm>
+
 namespace zrecord {
 
 TrackEditCommand::TrackEditCommand(Project& project, int trackIndex, const QString& text)
@@ -78,6 +80,51 @@ AppendClipCommand::AppendClipCommand(Project& project, int trackIndex, std::vect
 void AppendClipCommand::apply() {
     Project::appendClip(track(), samples_, channels_);
     project().playheadFrame = track().endFrame();
+}
+
+namespace {
+// Inserts `clip` into `track` keeping clips sorted by startFrame, and returns
+// the index it landed at.
+int insertClipSorted(Track& track, Clip clip) {
+    auto pos = std::lower_bound(track.clips.begin(), track.clips.end(), clip.startFrame,
+                                 [](const Clip& c, int64_t f) { return c.startFrame < f; });
+    int index = static_cast<int>(pos - track.clips.begin());
+    track.clips.insert(pos, std::move(clip));
+    return index;
+}
+} // namespace
+
+MoveClipCommand::MoveClipCommand(Project& project, int fromTrack, int clipIndex, int toTrack, int64_t newStartFrame)
+    : QUndoCommand("Move Clip"),
+      project_(project),
+      fromTrack_(fromTrack),
+      clipIndex_(clipIndex),
+      toTrack_(toTrack),
+      newStartFrame_(newStartFrame) {}
+
+void MoveClipCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    Track& from = project_.tracks[static_cast<size_t>(fromTrack_)];
+    Clip clip = std::move(from.clips[static_cast<size_t>(clipIndex_)]);
+    from.clips.erase(from.clips.begin() + clipIndex_);
+
+    origStartFrame_ = clip.startFrame;
+    clip.startFrame = newStartFrame_;
+    insertedIndex_ = insertClipSorted(project_.tracks[static_cast<size_t>(toTrack_)], std::move(clip));
+
+    project_.selection.clear();
+}
+
+void MoveClipCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    Track& to = project_.tracks[static_cast<size_t>(toTrack_)];
+    Clip clip = std::move(to.clips[static_cast<size_t>(insertedIndex_)]);
+    to.clips.erase(to.clips.begin() + insertedIndex_);
+
+    clip.startFrame = origStartFrame_;
+    insertClipSorted(project_.tracks[static_cast<size_t>(fromTrack_)], std::move(clip));
+
+    project_.selection.clear();
 }
 
 AddTrackCommand::AddTrackCommand(Project& project, std::string name)

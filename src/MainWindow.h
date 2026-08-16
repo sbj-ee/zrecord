@@ -49,6 +49,7 @@ private slots:
     void onSilenceSelection();
     void onApplyEffect();
     void onSelectionChanged();
+    void onClipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame);
 
 private:
     void buildUi();
@@ -95,6 +96,10 @@ private:
     QAction* zoomInAction_ = nullptr;
     QAction* zoomOutAction_ = nullptr;
     QAction* zoomFitAction_ = nullptr;
+
+    // Mutually exclusive tool selection for the timeline.
+    QAction* selectToolAction_ = nullptr;
+    QAction* moveToolAction_ = nullptr;
 
     // Transport/export keep their custom-styled QPushButtons, so these
     // actions exist only to carry the shortcut; their enabled state is kept

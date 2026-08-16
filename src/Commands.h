@@ -112,6 +112,25 @@ private:
     int channels_;
 };
 
+// Moves one clip along its track's timeline and/or to another track. Spans
+// two tracks, so it can't reuse TrackEditCommand's single-track snapshot.
+class MoveClipCommand : public QUndoCommand {
+public:
+    MoveClipCommand(Project& project, int fromTrack, int clipIndex, int toTrack, int64_t newStartFrame);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    Project& project_;
+    int fromTrack_;
+    int clipIndex_;
+    int toTrack_;
+    int64_t newStartFrame_;
+    int64_t origStartFrame_ = 0;
+    int insertedIndex_ = -1; // where the clip landed, so undo can find it again
+};
+
 class AddTrackCommand : public QUndoCommand {
 public:
     AddTrackCommand(Project& project, std::string name);
