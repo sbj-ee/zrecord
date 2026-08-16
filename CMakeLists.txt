@@ -7,29 +7,43 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
 pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
 
-add_executable(zrecord
-    src/main.cpp
-    src/MainWindow.cpp
+# Everything that isn't a widget lives in a library so the tests can link the
+# real code rather than a copy of it. The GUI classes (MainWindow, TrackPanel)
+# stay in the executable -- they need a display, so they're exercised by
+# running the app, not by unit tests.
+add_library(zrecord_core STATIC
     src/AudioEngine.cpp
     src/Filters.cpp
     src/AudioFileWriter.cpp
     src/AudioFileReader.cpp
     src/Project.cpp
     src/Commands.cpp
-    src/TrackPanel.cpp
     src/ProjectFile.cpp
 )
 
-target_link_libraries(zrecord PRIVATE
+target_include_directories(zrecord_core PUBLIC src)
+
+target_link_libraries(zrecord_core PUBLIC
     Qt6::Widgets
     PkgConfig::PORTAUDIO
     PkgConfig::SNDFILE
 )
+
+add_executable(zrecord
+    src/main.cpp
+    src/MainWindow.cpp
+    src/TrackPanel.cpp
+)
+
+target_link_libraries(zrecord PRIVATE zrecord_core)
+
+enable_testing()
+add_subdirectory(tests)
 
 install(TARGETS zrecord RUNTIME DESTINATION bin)
 install(FILES packaging/zrecord.desktop DESTINATION share/applications)
