@@ -1,5 +1,7 @@
 #include "TrackPanel.h"
 
+#include "Snap.h"
+
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QContextMenuEvent>
@@ -65,46 +67,14 @@ int64_t TrackPanel::applySnap(int64_t rawStart, int64_t clipLength, const Clip* 
     if (!snapEnabled_ || project_ == nullptr) {
         return rawStart;
     }
-
+    // The radius is defined in pixels so the feel stays the same at every zoom
+    // level; the arithmetic itself lives in Snap so it can be tested headless.
     int64_t threshold = std::max<int64_t>(1, static_cast<int64_t>(kSnapPixels * framesPerPixel_));
-    int64_t bestStart = rawStart;
-    int64_t bestTarget = 0;
-    int64_t bestDistance = threshold + 1;
-
-    // Each target is tried against both edges of the dragged clip; the closer
-    // edge wins, which is what makes butting a clip up against its neighbour
-    // feel the same as aligning their left edges.
-    auto consider = [&](int64_t target) {
-        int64_t startDistance = std::abs(rawStart - target);
-        if (startDistance < bestDistance) {
-            bestDistance = startDistance;
-            bestStart = target;
-            bestTarget = target;
-        }
-        int64_t endDistance = std::abs(rawStart + clipLength - target);
-        if (endDistance < bestDistance && target - clipLength >= 0) {
-            bestDistance = endDistance;
-            bestStart = target - clipLength;
-            bestTarget = target;
-        }
-    };
-
-    consider(0);
-    consider(project_->playheadFrame);
-    for (const auto& track : project_->tracks) {
-        for (const auto& clip : track.clips) {
-            if (&clip == excludeClip) continue;
-            consider(clip.startFrame);
-            consider(clip.endFrame());
-        }
-    }
-
-    if (bestDistance <= threshold && bestStart >= 0) {
-        snappedOut = true;
-        snapFrameOut = bestTarget;
-        return bestStart;
-    }
-    return rawStart;
+    SnapResult result = snapToTargets(rawStart, clipLength,
+                                       collectSnapTargets(*project_, excludeClip), threshold);
+    snappedOut = result.snapped;
+    snapFrameOut = result.targetFrame;
+    return result.startFrame;
 }
 
 int TrackPanel::clipIndexAt(int trackIndex, int64_t frame) const {

@@ -22,6 +22,7 @@ add_library(zrecord_core STATIC
     src/AudioFileWriter.cpp
     src/AudioFileReader.cpp
     src/Project.cpp
+    src/Snap.cpp
     src/Commands.cpp
     src/ProjectFile.cpp
 )
