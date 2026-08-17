@@ -52,7 +52,7 @@ cpack -G DEB
 This produces `build/zrecord_<version>_amd64.deb`. Install it with:
 
 ```bash
-sudo apt install ./build/zrecord_0.1.0_amd64.deb
+sudo apt install ./build/zrecord_0.2.0_amd64.deb
 ```
 
 This installs the `zrecord` binary to `/usr/bin` and a desktop entry to `/usr/share/applications`, so it also appears in your application launcher.
