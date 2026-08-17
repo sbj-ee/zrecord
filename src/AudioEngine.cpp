@@ -15,7 +15,7 @@ AudioEngine::~AudioEngine() {
     Pa_Terminate();
 }
 
-std::vector<AudioEngine::DeviceInfo> AudioEngine::listInputDevices() const {
+std::vector<AudioDeviceInfo> AudioEngine::listInputDevices() const {
     std::vector<DeviceInfo> devices;
     int count = Pa_GetDeviceCount();
     for (int i = 0; i < count; ++i) {

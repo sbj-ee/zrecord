@@ -3,7 +3,7 @@
 #include <QMainWindow>
 #include <memory>
 
-#include "AudioEngine.h"
+#include "AudioEngineInterface.h"
 #include "Project.h"
 #include "TrackPanel.h"
 
@@ -24,6 +24,9 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    // Injecting the engine is what lets a test build a MainWindow without
+    // touching real audio hardware.
+    explicit MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* parent = nullptr);
     ~MainWindow() override;
 
 private slots:
@@ -58,6 +61,12 @@ private slots:
     void onLabelActivated(int labelIndex);
     void onLabelContextMenu(int labelIndex, const QPoint& globalPos);
 
+public:
+    // Test hooks: these drive the same enabled-state paths the UI does, so a
+    // test can assert the action matrix without simulating a whole session.
+    void refreshActionStateForTest() { onSelectionChanged(); }
+    void setControlsEnabledForTest(bool recording) { setControlsEnabled(recording); }
+
 private:
     void buildUi();
     // Menus reuse the same QActions the toolbar shows, so the two can't drift
@@ -71,7 +80,7 @@ private:
     bool projectHasAnyContent() const;
 
     Project project_;
-    std::unique_ptr<AudioEngine> engine_;
+    std::unique_ptr<AudioEngineInterface> engine_;
     QUndoStack* undoStack_ = nullptr;
     int recordingArmedTrackIndex_ = -1;
 

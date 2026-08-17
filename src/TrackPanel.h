@@ -35,6 +35,10 @@ public:
     // pixel-to-frame arithmetic rather than whatever zoom it happens to be at.
     void setFramesPerPixelForTest(double framesPerPixel);
 
+    // The panel doesn't own the project; a test needs the same pointer to set
+    // up state that MainWindow will then react to.
+    Project* projectForTest() const { return project_; }
+
     void setSnapEnabled(bool enabled);
     bool snapEnabled() const { return snapEnabled_; }
 

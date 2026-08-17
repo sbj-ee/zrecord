@@ -1,5 +1,7 @@
 #include <QtTest>
 
+#include "FakeAudioEngine.h"
+#include "MainWindow.h"
 #include "TrackPanel.h"
 
 using namespace zrecord;
@@ -34,6 +36,11 @@ private slots:
     void draggingLeftPastZeroClampsInsteadOfVanishing();
     void doubleClickOnALabelActivatesIt();
     void labelStripDoesNotSwallowLaneClicks();
+
+    void mainWindowDisablesEditActionsWithoutASelection();
+    void mainWindowEnablesEditActionsWithASelection();
+    void mainWindowSelectAllNeedsContent();
+    void mainWindowLocksEditingWhileRecording();
 
 private:
     Project project_;
@@ -162,6 +169,100 @@ void TestGui::labelStripDoesNotSwallowLaneClicks() {
     QTest::mouseClick(&panel_, Qt::LeftButton, Qt::NoModifier,
                        QPoint(TrackPanel::kHeaderWidth + 50, TrackPanel::lanesTop() + 2));
     QCOMPARE(project_.selection.trackIndex, 0);
+}
+
+namespace {
+
+// MainWindow keeps its actions private, so tests reach them by objectName the
+// same way a user reaches them by label.
+QAction* findAction(QWidget& window, const QString& text) {
+    for (QAction* action : window.findChildren<QAction*>()) {
+        if (action->text() == text) {
+            return action;
+        }
+    }
+    return nullptr;
+}
+
+bool actionEnabled(QWidget& window, const QString& text) {
+    QAction* action = findAction(window, text);
+    return action != nullptr && action->isEnabled();
+}
+
+} // namespace
+
+void TestGui::mainWindowDisablesEditActionsWithoutASelection() {
+    // Constructing MainWindow at all is the point here: before the engine was
+    // injectable this needed real audio hardware.
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+
+    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "Fade In", "Fade Out",
+                                 "Crossfade", "Apply Filters to Selection"}) {
+        QVERIFY2(!actionEnabled(window, name),
+                 qPrintable(QString("%1 was enabled with no selection").arg(name)));
+    }
+}
+
+void TestGui::mainWindowEnablesEditActionsWithASelection() {
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+
+    // Give it a track with audio and select part of it, the way the panel does.
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    QVERIFY(project != nullptr);
+    Track track;
+    track.clips.push_back(makeClip(0, 40000));
+    project->tracks.push_back(std::move(track));
+    project->selection.trackIndex = 0;
+    project->selection.startFrame = 100;
+    project->selection.endFrame = 20000;
+    window.refreshActionStateForTest();
+
+    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "Fade In", "Fade Out",
+                                 "Apply Filters to Selection"}) {
+        QVERIFY2(actionEnabled(window, name),
+                 qPrintable(QString("%1 stayed disabled with a selection").arg(name)));
+    }
+    // Paste still needs something on the clipboard.
+    QVERIFY(!actionEnabled(window, "Paste"));
+}
+
+void TestGui::mainWindowSelectAllNeedsContent() {
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+
+    window.refreshActionStateForTest();
+    QVERIFY2(!actionEnabled(window, "Select All"), "Select All was enabled on an empty project");
+
+    // An empty track still isn't content.
+    project->tracks.push_back(Track{});
+    window.refreshActionStateForTest();
+    QVERIFY2(!actionEnabled(window, "Select All"), "Select All was enabled with only an empty track");
+
+    project->tracks[0].clips.push_back(makeClip(0, 1000));
+    window.refreshActionStateForTest();
+    QVERIFY(actionEnabled(window, "Select All"));
+}
+
+void TestGui::mainWindowLocksEditingWhileRecording() {
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    Track track;
+    track.clips.push_back(makeClip(0, 40000));
+    project->tracks.push_back(std::move(track));
+    project->selection.trackIndex = 0;
+    project->selection.startFrame = 0;
+    project->selection.endFrame = 20000;
+
+    window.setControlsEnabledForTest(true); // as if a take were running
+    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "New", "Open...", "Save..."}) {
+        QVERIFY2(!actionEnabled(window, name),
+                 qPrintable(QString("%1 stayed enabled during recording").arg(name)));
+    }
+    // Zoom is deliberately still available while recording.
+    QVERIFY(actionEnabled(window, "Zoom In"));
+
+    window.setControlsEnabledForTest(false);
+    QVERIFY(actionEnabled(window, "Cut"));
 }
 
 QTEST_MAIN(TestGui)
