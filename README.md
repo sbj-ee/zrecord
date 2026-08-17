@@ -57,6 +57,10 @@ sudo apt install ./build/zrecord_0.2.0_amd64.deb
 
 This installs the `zrecord` binary to `/usr/bin` and a desktop entry to `/usr/share/applications`, so it also appears in your application launcher.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed between releases.
+
 ## Notes
 
 - If recording or playback seems stalled or silent, check your system's mic input volume/mute state (e.g. via `wpctl status` or your desktop's sound settings) before assuming it's an app bug.
