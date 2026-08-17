@@ -168,6 +168,10 @@ void MainWindow::buildUi() {
     silenceAction_ = addTool("Silence", "Silence selection", QKeySequence("Ctrl+L"));
     fadeInAction_ = addTool("Fade In", "Ramp the selection up from silence", QKeySequence());
     fadeOutAction_ = addTool("Fade Out", "Ramp the selection down to silence", QKeySequence());
+    crossfadeAction_ = addTool("Crossfade",
+                                "Crossfade two adjacent clips; select a region spanning the join, "
+                                "its length sets the crossfade duration",
+                                QKeySequence());
     toolBar->addSeparator();
     undoAction_ = addTool("Undo", "Undo", QKeySequence::Undo);
     redoAction_ = addTool("Redo", "Redo", QKeySequence::Redo);
@@ -225,6 +229,7 @@ void MainWindow::buildUi() {
     connect(silenceAction_, &QAction::triggered, this, &MainWindow::onSilenceSelection);
     connect(fadeInAction_, &QAction::triggered, this, &MainWindow::onFadeIn);
     connect(fadeOutAction_, &QAction::triggered, this, &MainWindow::onFadeOut);
+    connect(crossfadeAction_, &QAction::triggered, this, &MainWindow::onCrossfade);
     connect(undoAction_, &QAction::triggered, undoStack_, &QUndoStack::undo);
     connect(redoAction_, &QAction::triggered, undoStack_, &QUndoStack::redo);
     connect(undoStack_, &QUndoStack::canUndoChanged, undoAction_, &QAction::setEnabled);
@@ -482,6 +487,7 @@ void MainWindow::buildMenus() {
     editMenu->addAction(silenceAction_);
     editMenu->addAction(fadeInAction_);
     editMenu->addAction(fadeOutAction_);
+    editMenu->addAction(crossfadeAction_);
     editMenu->addAction(applyEffectAction_);
 
     QMenu* trackMenu = menuBar()->addMenu("&Tracks");
@@ -598,7 +604,7 @@ void MainWindow::setControlsEnabled(bool recording) {
     for (QAction* action : {newProjectAction_, openProjectAction_, saveProjectAction_,
                              addTrackAction_, removeTrackAction_, importAction_,
                              cutAction_, copyAction_, pasteAction_, deleteAction_,
-                             silenceAction_, fadeInAction_, fadeOutAction_,
+                             silenceAction_, fadeInAction_, fadeOutAction_, crossfadeAction_,
                              applyEffectAction_, addLabelAction_}) {
         action->setEnabled(!recording);
     }
@@ -918,6 +924,58 @@ void MainWindow::onFadeOut() {
     trackPanel_->refresh();
 }
 
+void MainWindow::onCrossfade() {
+    if (project_.selection.isEmpty()) {
+        return;
+    }
+    const Selection sel = project_.selection;
+    const int64_t frames = sel.endFrame - sel.startFrame;
+
+    // The selection picks the join and sets the duration: whichever pair of
+    // adjacent clips meet inside it get crossfaded over `frames`.
+    int firstClipIndex = -1;
+    bool tooShort = false;
+    {
+        std::lock_guard<std::mutex> lock(project_.mutex);
+        if (sel.trackIndex < 0 || sel.trackIndex >= static_cast<int>(project_.tracks.size())) {
+            return;
+        }
+        const Track& track = project_.tracks[static_cast<size_t>(sel.trackIndex)];
+        for (size_t i = 0; i + 1 < track.clips.size(); ++i) {
+            int64_t join = track.clips[i].endFrame();
+            if (join != track.clips[i + 1].startFrame) {
+                continue; // a gap, not a join
+            }
+            if (join >= sel.startFrame && join <= sel.endFrame) {
+                if (track.clips[i].frameCount() < frames || track.clips[i + 1].frameCount() < frames) {
+                    tooShort = true;
+                } else {
+                    firstClipIndex = static_cast<int>(i);
+                }
+                break;
+            }
+        }
+    }
+
+    if (tooShort) {
+        QMessageBox::information(this, "Crossfade",
+                                  "The selection is longer than one of the clips being joined.\n"
+                                  "Select a shorter region across the join.");
+        return;
+    }
+    if (firstClipIndex < 0) {
+        QMessageBox::information(this, "Crossfade",
+                                  "Select a region spanning the join between two adjacent clips "
+                                  "on one track.");
+        return;
+    }
+
+    undoStack_->push(new CrossfadeCommand(project_, sel.trackIndex, firstClipIndex, frames,
+                                           project_.channels));
+    trackPanel_->refresh();
+    onSelectionChanged();
+}
+
 void MainWindow::onApplyEffect() {
     if (project_.selection.isEmpty()) {
         return;
@@ -1003,6 +1061,7 @@ void MainWindow::onSelectionChanged() {
     silenceAction_->setEnabled(hasSelection);
     fadeInAction_->setEnabled(hasSelection);
     fadeOutAction_->setEnabled(hasSelection);
+    crossfadeAction_->setEnabled(hasSelection);
     // The button is a plain QPushButton (it isn't driven by the action), so
     // both need setting or the menu entry advertises itself as available
     // while the button is greyed out.

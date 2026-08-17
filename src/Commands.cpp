@@ -82,6 +82,18 @@ void FadeCommand::apply() {
     Project::writeRange(track(), startFrame_, endFrame_, region, channels_);
 }
 
+CrossfadeCommand::CrossfadeCommand(Project& project, int trackIndex, int firstClipIndex,
+                                    int64_t frames, int channels)
+    : TrackEditCommand(project, trackIndex, "Crossfade"),
+      firstClipIndex_(firstClipIndex),
+      frames_(frames),
+      channels_(channels) {}
+
+void CrossfadeCommand::apply() {
+    Project::crossfadeClips(track(), firstClipIndex_, frames_, channels_);
+    project().selection.clear();
+}
+
 PasteCommand::PasteCommand(Project& project, int trackIndex, int64_t atFrame, std::vector<float> samples, int channels)
     : TrackEditCommand(project, trackIndex, "Paste"), atFrame_(atFrame), samples_(std::move(samples)), channels_(channels) {}
 
