@@ -2,6 +2,7 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QContextMenuEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScrollBar>
@@ -29,7 +30,7 @@ QString formatTimecode(double seconds, double stepSeconds) {
 } // namespace
 
 TrackPanel::TrackPanel(QWidget* parent) : QWidget(parent) {
-    setMinimumHeight(kRulerHeight + kLaneHeight + kScrollBarHeight);
+    setMinimumHeight(lanesTop() + kLaneHeight + kScrollBarHeight);
     setMouseTracking(true);
 
     hScroll_ = new QScrollBar(Qt::Horizontal, this);
@@ -226,7 +227,7 @@ void TrackPanel::rebuildHeaders() {
 
 void TrackPanel::layoutHeaders() {
     for (size_t i = 0; i < headers_.size(); ++i) {
-        int y = kRulerHeight + static_cast<int>(i) * kLaneHeight;
+        int y = lanesTop() + static_cast<int>(i) * kLaneHeight;
         headers_[i].container->setGeometry(0, y, kHeaderWidth, kLaneHeight);
     }
 }
@@ -305,8 +306,8 @@ int TrackPanel::xAtFrame(int64_t frame) const {
 }
 
 int TrackPanel::laneIndexAtY(int y) const {
-    if (y < kRulerHeight) return -1;
-    int index = (y - kRulerHeight) / kLaneHeight;
+    if (y < lanesTop()) return -1;
+    int index = (y - lanesTop()) / kLaneHeight;
     if (project_ == nullptr || index < 0 || index >= static_cast<int>(project_->tracks.size())) {
         return -1;
     }
@@ -387,7 +388,7 @@ void TrackPanel::drawClipDragPreview(QPainter& painter, int w) {
         return;
     }
 
-    int laneTop = kRulerHeight + clipDrag_.targetTrack * kLaneHeight;
+    int laneTop = lanesTop() + clipDrag_.targetTrack * kLaneHeight;
     int midY = laneTop + kLaneHeight / 2;
     int usableHalfHeight = kLaneHeight / 2 - 6;
 
@@ -408,9 +409,9 @@ void TrackPanel::drawClipDragPreview(QPainter& painter, int w) {
     if (clipDrag_.snapped) {
         int snapX = xAtFrame(clipDrag_.snapFrame);
         if (snapX >= kHeaderWidth && snapX <= w) {
-            int lanesBottom = kRulerHeight + static_cast<int>(project_->tracks.size()) * kLaneHeight;
+            int lanesBottom = lanesTop() + static_cast<int>(project_->tracks.size()) * kLaneHeight;
             painter.setPen(QPen(QColor(255, 214, 0), 1, Qt::DashLine));
-            painter.drawLine(snapX, kRulerHeight, snapX, lanesBottom);
+            painter.drawLine(snapX, lanesTop(), snapX, lanesBottom);
         }
     }
 
@@ -457,6 +458,100 @@ void TrackPanel::drawLaneWaveform(QPainter& painter, const Track& track, int lan
     }
 }
 
+namespace {
+// Width reserved for a label's text, and the marker drawn at its start.
+constexpr int kLabelTextWidth = 130;
+constexpr int kLabelMarkerWidth = 7;
+} // namespace
+
+void TrackPanel::drawLabelStrip(QPainter& painter, int w) {
+    painter.fillRect(0, kRulerHeight, w, kLabelStripHeight, QColor(28, 28, 34));
+    painter.setPen(QColor(52, 52, 60));
+    painter.drawLine(kHeaderWidth, kRulerHeight + kLabelStripHeight - 1, w, kRulerHeight + kLabelStripHeight - 1);
+
+    if (project_ == nullptr) {
+        return;
+    }
+
+    painter.setPen(QColor(150, 150, 160));
+    painter.drawText(QRect(6, kRulerHeight, kHeaderWidth - 12, kLabelStripHeight),
+                      Qt::AlignLeft | Qt::AlignVCenter, "Labels");
+
+    for (const auto& label : project_->labels) {
+        int xStart = xAtFrame(label.startFrame);
+        int xEnd = label.isRange() ? xAtFrame(label.endFrame) : xStart;
+        if (xEnd < kHeaderWidth || xStart > w) {
+            continue;
+        }
+
+        // Markers occupy the top of the strip and text the bottom half, so a
+        // range's connector doesn't strike through its own caption.
+        const int markerTop = kRulerHeight + 2;
+        const int markerBottom = kRulerHeight + 7;
+
+        painter.setPen(QColor(255, 214, 0));
+        if (label.isRange()) {
+            // A span reads as a bracket so its extent is obvious even when the
+            // text runs past the end of the region.
+            int clampedStart = std::max(kHeaderWidth, xStart);
+            int clampedEnd = std::min(w, xEnd);
+            painter.drawLine(clampedStart, markerTop, clampedEnd, markerTop);
+            painter.drawLine(clampedStart, markerTop, clampedStart, markerBottom);
+            painter.drawLine(clampedEnd, markerTop, clampedEnd, markerBottom);
+        } else if (xStart >= kHeaderWidth) {
+            painter.drawLine(xStart, markerTop, xStart, markerBottom);
+            painter.drawLine(xStart, markerTop, xStart + kLabelMarkerWidth / 2, markerTop + 3);
+            painter.drawLine(xStart, markerTop, xStart - kLabelMarkerWidth / 2, markerTop + 3);
+        }
+
+        int textX = std::max(kHeaderWidth + 2, xStart + 4);
+        QRect textRect(textX, markerBottom, std::min(kLabelTextWidth, w - textX),
+                        kRulerHeight + kLabelStripHeight - markerBottom);
+        painter.setPen(QColor(240, 226, 160));
+        painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
+                          painter.fontMetrics().elidedText(QString::fromStdString(label.text),
+                                                            Qt::ElideRight, textRect.width()));
+    }
+}
+
+int TrackPanel::labelIndexAt(const QPoint& pos) const {
+    if (project_ == nullptr || pos.y() < kRulerHeight || pos.y() >= kRulerHeight + kLabelStripHeight) {
+        return -1;
+    }
+    // Later labels are drawn over earlier ones, so hit-test back to front.
+    for (int i = static_cast<int>(project_->labels.size()) - 1; i >= 0; --i) {
+        const Label& label = project_->labels[static_cast<size_t>(i)];
+        int xStart = xAtFrame(label.startFrame);
+        int xEnd = label.isRange() ? xAtFrame(label.endFrame) : xStart;
+        // The clickable area covers the marker/bracket plus its text.
+        int hitStart = xStart - kLabelMarkerWidth;
+        int hitEnd = std::max(xEnd, xStart + kLabelTextWidth);
+        if (pos.x() >= hitStart && pos.x() <= hitEnd) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void TrackPanel::mouseDoubleClickEvent(QMouseEvent* event) {
+    int index = labelIndexAt(event->pos());
+    if (index >= 0) {
+        emit labelActivated(index);
+        return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
+}
+
+void TrackPanel::contextMenuEvent(QContextMenuEvent* event) {
+    int index = labelIndexAt(event->pos());
+    if (index >= 0) {
+        emit labelContextMenuRequested(index, event->globalPos());
+        event->accept();
+        return;
+    }
+    QWidget::contextMenuEvent(event);
+}
+
 void TrackPanel::drawRuler(QPainter& painter, int w) {
     painter.fillRect(0, 0, w, kRulerHeight, QColor(32, 32, 38));
     if (project_ == nullptr || project_->sampleRate <= 0.0) return;
@@ -492,6 +587,7 @@ void TrackPanel::paintEvent(QPaintEvent*) {
 
     int w = width();
     drawRuler(painter, w);
+    drawLabelStrip(painter, w);
 
     if (project_ == nullptr) return;
 
@@ -499,7 +595,7 @@ void TrackPanel::paintEvent(QPaintEvent*) {
 
     for (size_t i = 0; i < project_->tracks.size(); ++i) {
         const Track& track = project_->tracks[i];
-        int laneTop = kRulerHeight + static_cast<int>(i) * kLaneHeight;
+        int laneTop = lanesTop() + static_cast<int>(i) * kLaneHeight;
         int midY = laneTop + kLaneHeight / 2;
         int usableHalfHeight = kLaneHeight / 2 - 6;
 
@@ -541,7 +637,7 @@ void TrackPanel::paintEvent(QPaintEvent*) {
 
     drawClipDragPreview(painter, w);
 
-    int laneAreaBottom = kRulerHeight + static_cast<int>(project_->tracks.size()) * kLaneHeight;
+    int laneAreaBottom = lanesTop() + static_cast<int>(project_->tracks.size()) * kLaneHeight;
     int playheadX = xAtFrame(project_->playheadFrame);
     if (playheadX >= kHeaderWidth && playheadX <= w) {
         painter.setPen(QColor(255, 80, 80));

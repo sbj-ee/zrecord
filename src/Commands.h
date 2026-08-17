@@ -149,6 +149,46 @@ private:
     int insertedIndex_ = -1; // where the clip landed, so undo can find it again
 };
 
+class AddLabelCommand : public QUndoCommand {
+public:
+    AddLabelCommand(Project& project, Label label);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    Project& project_;
+    Label label_;
+    int insertedIndex_ = -1;
+};
+
+class RemoveLabelCommand : public QUndoCommand {
+public:
+    RemoveLabelCommand(Project& project, int index);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    Project& project_;
+    int index_;
+    Label removed_;
+};
+
+class RenameLabelCommand : public QUndoCommand {
+public:
+    RenameLabelCommand(Project& project, int index, std::string text);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    Project& project_;
+    int index_;
+    std::string newText_;
+    std::string oldText_;
+};
+
 class AddTrackCommand : public QUndoCommand {
 public:
     AddTrackCommand(Project& project, std::string name);

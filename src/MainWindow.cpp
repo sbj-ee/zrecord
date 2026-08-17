@@ -8,6 +8,7 @@
 #include <QKeySequence>
 #include <QFileDialog>
 #include <QGridLayout>
+#include <QInputDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -157,6 +158,8 @@ void MainWindow::buildUi() {
     addTrackAction_ = addTool("+Track", "Add track", QKeySequence("Ctrl+Shift+N"));
     removeTrackAction_ = addTool("-Track", "Remove selected (or last) track", QKeySequence("Ctrl+Shift+W"));
     importAction_ = addTool("Import...", "Import audio file into selected track", QKeySequence("Ctrl+I"));
+    addLabelAction_ = addTool("Label", "Label the selection, or the playhead if nothing is selected",
+                               QKeySequence("Ctrl+B"));
     toolBar->addSeparator();
     cutAction_ = addTool("Cut", "Cut selection", QKeySequence::Cut);
     copyAction_ = addTool("Copy", "Copy selection", QKeySequence::Copy);
@@ -214,6 +217,7 @@ void MainWindow::buildUi() {
     connect(addTrackAction_, &QAction::triggered, this, &MainWindow::onAddTrack);
     connect(removeTrackAction_, &QAction::triggered, this, &MainWindow::onRemoveTrack);
     connect(importAction_, &QAction::triggered, this, &MainWindow::onImportAudio);
+    connect(addLabelAction_, &QAction::triggered, this, &MainWindow::onAddLabel);
     connect(cutAction_, &QAction::triggered, this, &MainWindow::onCut);
     connect(copyAction_, &QAction::triggered, this, &MainWindow::onCopy);
     connect(pasteAction_, &QAction::triggered, this, &MainWindow::onPaste);
@@ -277,6 +281,8 @@ void MainWindow::buildUi() {
     rootLayout->addWidget(trackPanel_, 1);
     connect(trackPanel_, &TrackPanel::selectionChanged, this, &MainWindow::onSelectionChanged);
     connect(trackPanel_, &TrackPanel::clipMoveRequested, this, &MainWindow::onClipMoveRequested);
+    connect(trackPanel_, &TrackPanel::labelActivated, this, &MainWindow::onLabelActivated);
+    connect(trackPanel_, &TrackPanel::labelContextMenuRequested, this, &MainWindow::onLabelContextMenu);
     connect(selectToolAction_, &QAction::triggered, this, [this] {
         trackPanel_->setTool(TrackPanel::Tool::Select);
     });
@@ -481,6 +487,8 @@ void MainWindow::buildMenus() {
     QMenu* trackMenu = menuBar()->addMenu("&Tracks");
     trackMenu->addAction(addTrackAction_);
     trackMenu->addAction(removeTrackAction_);
+    trackMenu->addSeparator();
+    trackMenu->addAction(addLabelAction_);
 
     QMenu* transportMenu = menuBar()->addMenu("Trans&port");
     transportMenu->addAction(recordAction_);
@@ -591,7 +599,7 @@ void MainWindow::setControlsEnabled(bool recording) {
                              addTrackAction_, removeTrackAction_, importAction_,
                              cutAction_, copyAction_, pasteAction_, deleteAction_,
                              silenceAction_, fadeInAction_, fadeOutAction_,
-                             applyEffectAction_}) {
+                             applyEffectAction_, addLabelAction_}) {
         action->setEnabled(!recording);
     }
     if (!recording) {
@@ -925,6 +933,66 @@ void MainWindow::onClipMoveRequested(int fromTrack, int clipIndex, int toTrack, 
                                           static_cast<int64_t>(newStartFrame)));
     trackPanel_->refresh();
     onSelectionChanged(); // the move clears the selection
+}
+
+void MainWindow::onAddLabel() {
+    Label label;
+    if (!project_.selection.isEmpty()) {
+        label.startFrame = project_.selection.startFrame;
+        label.endFrame = project_.selection.endFrame;
+    } else {
+        label.startFrame = project_.playheadFrame;
+        label.endFrame = project_.playheadFrame; // a point marker
+    }
+
+    bool accepted = false;
+    QString text = QInputDialog::getText(this, "Add Label", "Label text:", QLineEdit::Normal,
+                                          QString(), &accepted);
+    if (!accepted || text.trimmed().isEmpty()) {
+        return;
+    }
+    label.text = text.trimmed().toStdString();
+
+    undoStack_->push(new AddLabelCommand(project_, label));
+    trackPanel_->update();
+}
+
+void MainWindow::onLabelActivated(int labelIndex) {
+    if (labelIndex < 0 || labelIndex >= static_cast<int>(project_.labels.size())) {
+        return;
+    }
+    const QString current = QString::fromStdString(project_.labels[static_cast<size_t>(labelIndex)].text);
+
+    bool accepted = false;
+    QString text = QInputDialog::getText(this, "Rename Label", "Label text:", QLineEdit::Normal,
+                                          current, &accepted);
+    if (!accepted) {
+        return;
+    }
+    if (text.trimmed().isEmpty()) {
+        // Clearing the text is the natural way to say "remove this".
+        undoStack_->push(new RemoveLabelCommand(project_, labelIndex));
+    } else if (text.trimmed() != current) {
+        undoStack_->push(new RenameLabelCommand(project_, labelIndex, text.trimmed().toStdString()));
+    }
+    trackPanel_->update();
+}
+
+void MainWindow::onLabelContextMenu(int labelIndex, const QPoint& globalPos) {
+    if (labelIndex < 0 || labelIndex >= static_cast<int>(project_.labels.size())) {
+        return;
+    }
+    QMenu menu(this);
+    QAction* rename = menu.addAction("Rename...");
+    QAction* remove = menu.addAction("Delete");
+    QAction* chosen = menu.exec(globalPos);
+
+    if (chosen == rename) {
+        onLabelActivated(labelIndex);
+    } else if (chosen == remove) {
+        undoStack_->push(new RemoveLabelCommand(project_, labelIndex));
+        trackPanel_->update();
+    }
 }
 
 void MainWindow::onSelectionChanged() {

@@ -60,6 +60,21 @@ struct Track {
     int64_t endFrame() const;
 };
 
+// A named point or span on the timeline. Labels belong to the project rather
+// than to a track (Audacity puts them in a dedicated label *track*); with a
+// single global lane there's no track-type polymorphism to introduce, at the
+// cost of not being able to keep separate sets of labels.
+//
+// Positions are absolute and do not follow ripple edits: a label marks a point
+// in time, not a point in a particular track's audio.
+struct Label {
+    int64_t startFrame = 0;
+    int64_t endFrame = 0; // equal to startFrame for a point marker
+    std::string text;
+
+    bool isRange() const { return endFrame > startFrame; }
+};
+
 struct Selection {
     int trackIndex = -1;
     int64_t startFrame = 0;
@@ -80,6 +95,7 @@ public:
     double sampleRate = 44100.0;
     int channels = 2;
     std::vector<Track> tracks;
+    std::vector<Label> labels; // kept sorted by startFrame
     Selection selection;
     int64_t playheadFrame = 0;
     std::vector<float> clipboard; // interleaved, `channels` wide
@@ -118,6 +134,9 @@ public:
 
     // Appends `samples` as a new clip at the track's current end.
     static void appendClip(Track& track, const std::vector<float>& samples, int channels);
+
+    // Inserts `label` keeping `labels` sorted by startFrame; returns its index.
+    int insertLabel(const Label& label);
 
     // Mixes all audible tracks (soloed tracks only, if any are soloed;
     // otherwise all unmuted tracks) over [startFrame, startFrame+frameCount)
