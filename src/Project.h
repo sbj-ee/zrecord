@@ -51,6 +51,15 @@ struct Clip {
     int64_t endFrame() const { return startFrame + frameCount(); }
 };
 
+// A point on a track's volume envelope. Envelopes belong to the track rather
+// than to a clip, matching Audacity: a curve is something you draw over a
+// stretch of time, and tying it to clips would mean deciding what happens to it
+// every time one is split, moved or crossfaded.
+struct EnvelopePoint {
+    int64_t frame = 0;
+    float gain = 1.0f; // linear, 1.0 = unity
+};
+
 // How a track's audio is drawn. Spectrogram is a view setting, not audio
 // state: it changes nothing about playback or export.
 enum class TrackDisplay { Waveform, Spectrogram };
@@ -63,8 +72,17 @@ struct Track {
     bool soloed = false;
     bool recordArmed = false;
     double gainDb = 0.0;
+    std::vector<EnvelopePoint> envelope; // kept sorted by frame; empty = unity
 
     int64_t endFrame() const;
+
+    // Envelope gain at `frame`: linear interpolation between the surrounding
+    // points, flat outside the first and last, and unity when there are none.
+    float envelopeGainAt(int64_t frame) const;
+
+    // Inserts a point keeping `envelope` sorted; replaces one already at that
+    // frame. Returns its index.
+    int insertEnvelopePoint(const EnvelopePoint& point);
 };
 
 // A named point or span on the timeline. Labels belong to the project rather

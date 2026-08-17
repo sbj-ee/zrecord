@@ -168,6 +168,25 @@ void MoveClipCommand::undo() {
     project_.selection.clear();
 }
 
+EnvelopeEditCommand::EnvelopeEditCommand(Project& project, int trackIndex,
+                                          std::vector<EnvelopePoint> after, const QString& text)
+    : QUndoCommand(text), project_(project), trackIndex_(trackIndex), after_(std::move(after)) {}
+
+void EnvelopeEditCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    Track& track = project_.tracks[static_cast<size_t>(trackIndex_)];
+    if (!captured_) {
+        before_ = track.envelope;
+        captured_ = true;
+    }
+    track.envelope = after_;
+}
+
+void EnvelopeEditCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.tracks[static_cast<size_t>(trackIndex_)].envelope = before_;
+}
+
 MoveClipsCommand::MoveClipsCommand(Project& project, std::vector<ClipMove> moves)
     : QUndoCommand(moves.size() > 1 ? "Move Clips" : "Move Clip"),
       project_(project),

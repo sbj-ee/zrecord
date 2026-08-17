@@ -55,6 +55,7 @@ void TrackPanel::setTool(Tool tool) {
     tool_ = tool;
     clipDrag_ = ClipDrag{};
     setCursor(tool_ == Tool::Move ? Qt::OpenHandCursor : Qt::ArrowCursor);
+    envelopeDrag_ = EnvelopeDrag{};
     update();
 }
 
@@ -497,6 +498,64 @@ const Clip* TrackPanel::draggedClip() const {
     return &track.clips[static_cast<size_t>(clipDrag_.clipIndex)];
 }
 
+float TrackPanel::gainForY(int laneTop, int y) const {
+    // Top of the lane is unity, bottom is silence.
+    float t = static_cast<float>(y - laneTop) / static_cast<float>(kLaneHeight);
+    return std::clamp(1.0f - t, 0.0f, 1.0f);
+}
+
+int TrackPanel::yForGain(int laneTop, float gain) const {
+    return laneTop + static_cast<int>((1.0f - std::clamp(gain, 0.0f, 1.0f)) * kLaneHeight);
+}
+
+int TrackPanel::envelopePointAt(int trackIndex, const QPoint& pos) const {
+    if (project_ == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(project_->tracks.size())) {
+        return -1;
+    }
+    const Track& track = project_->tracks[static_cast<size_t>(trackIndex)];
+    int laneTop = lanesTop() + trackIndex * kLaneHeight;
+    for (size_t i = 0; i < track.envelope.size(); ++i) {
+        int px = xAtFrame(track.envelope[i].frame);
+        int py = yForGain(laneTop, track.envelope[i].gain);
+        if (std::abs(pos.x() - px) <= kEnvelopeHandleRadius &&
+            std::abs(pos.y() - py) <= kEnvelopeHandleRadius) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+void TrackPanel::drawEnvelope(QPainter& painter, const Track& track, int laneTop, int w) {
+    if (track.envelope.empty()) {
+        return;
+    }
+    const bool active = tool_ == Tool::Envelope;
+    QColor line = active ? QColor(255, 170, 60) : QColor(255, 170, 60, 110);
+    painter.setPen(QPen(line, active ? 2 : 1));
+
+    // Draw the curve the same way it is evaluated, so what is shown and what
+    // is heard cannot drift apart.
+    int previousY = yForGain(laneTop, track.envelopeGainAt(frameAtX(kHeaderWidth)));
+    for (int x = kHeaderWidth + 1; x < w; ++x) {
+        int y = yForGain(laneTop, track.envelopeGainAt(frameAtX(x)));
+        painter.drawLine(x - 1, previousY, x, y);
+        previousY = y;
+    }
+
+    if (!active) {
+        return;
+    }
+    painter.setBrush(QColor(255, 200, 120));
+    painter.setPen(QPen(QColor(90, 60, 20), 1));
+    for (const EnvelopePoint& point : track.envelope) {
+        int px = xAtFrame(point.frame);
+        if (px < kHeaderWidth || px > w) continue;
+        painter.drawEllipse(QPoint(px, yForGain(laneTop, point.gain)),
+                             kEnvelopeHandleRadius - 1, kEnvelopeHandleRadius - 1);
+    }
+    painter.setBrush(Qt::NoBrush);
+}
+
 void TrackPanel::drawLaneSpectrogram(QPainter& painter, const Track& track, int laneTop, int w,
                                       int trackIndex) {
     const int usableHeight = kLaneHeight - 2;
@@ -786,6 +845,8 @@ void TrackPanel::paintEvent(QPaintEvent*) {
             }
         }
 
+        drawEnvelope(painter, track, laneTop, w);
+
         if (!project_->selection.isEmpty() && project_->selection.trackIndex == static_cast<int>(i)) {
             int xStart = std::max(kHeaderWidth, xAtFrame(project_->selection.startFrame));
             int xEnd = std::min(w, xAtFrame(project_->selection.endFrame));
@@ -809,6 +870,42 @@ void TrackPanel::mousePressEvent(QMouseEvent* event) {
     if (project_ == nullptr || event->pos().x() < kHeaderWidth) return;
     int lane = laneIndexAtY(event->pos().y());
     if (lane < 0) return;
+
+    if (tool_ == Tool::Envelope) {
+        int laneTop = lanesTop() + lane * kLaneHeight;
+        Track& track = project_->tracks[static_cast<size_t>(lane)];
+        int existing = envelopePointAt(lane, event->pos());
+
+        if (event->button() == Qt::RightButton) {
+            if (existing >= 0) {
+                std::vector<EnvelopePoint> points = track.envelope;
+                points.erase(points.begin() + existing);
+                emit envelopeEdited(lane, points, "Delete Envelope Point");
+            }
+            return;
+        }
+
+        if (existing >= 0) {
+            envelopeDrag_.active = true;
+            envelopeDrag_.trackIndex = lane;
+            envelopeDrag_.pointIndex = existing;
+            return;
+        }
+
+        // Clicking empty lane adds a point where the cursor is.
+        EnvelopePoint point;
+        point.frame = std::max<int64_t>(0, frameAtX(event->pos().x()));
+        point.gain = gainForY(laneTop, event->pos().y());
+        std::vector<EnvelopePoint> points = track.envelope;
+        Track scratch;
+        scratch.envelope = points;
+        int index = scratch.insertEnvelopePoint(point);
+        emit envelopeEdited(lane, scratch.envelope, "Add Envelope Point");
+        envelopeDrag_.active = true;
+        envelopeDrag_.trackIndex = lane;
+        envelopeDrag_.pointIndex = index;
+        return;
+    }
 
     if (tool_ == Tool::Move) {
         int64_t frame = frameAtX(event->pos().x());
@@ -860,6 +957,20 @@ void TrackPanel::mousePressEvent(QMouseEvent* event) {
 }
 
 void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
+    if (envelopeDrag_.active && project_ != nullptr) {
+        Track& track = project_->tracks[static_cast<size_t>(envelopeDrag_.trackIndex)];
+        if (envelopeDrag_.pointIndex >= 0 &&
+            envelopeDrag_.pointIndex < static_cast<int>(track.envelope.size())) {
+            int laneTop = lanesTop() + envelopeDrag_.trackIndex * kLaneHeight;
+            // Dragged live so the curve follows the cursor; the undoable step
+            // is pushed once, on release.
+            track.envelope[static_cast<size_t>(envelopeDrag_.pointIndex)].gain =
+                gainForY(laneTop, event->pos().y());
+            update();
+        }
+        return;
+    }
+
     if (clipDrag_.active && project_ != nullptr) {
         const Clip& clip = project_->tracks[static_cast<size_t>(clipDrag_.sourceTrack)]
                                .clips[static_cast<size_t>(clipDrag_.clipIndex)];
@@ -909,6 +1020,18 @@ void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void TrackPanel::mouseReleaseEvent(QMouseEvent*) {
+    if (envelopeDrag_.active) {
+        int trackIndex = envelopeDrag_.trackIndex;
+        envelopeDrag_ = EnvelopeDrag{};
+        if (project_ != nullptr && trackIndex >= 0 &&
+            trackIndex < static_cast<int>(project_->tracks.size())) {
+            emit envelopeEdited(trackIndex, project_->tracks[static_cast<size_t>(trackIndex)].envelope,
+                                 "Move Envelope Point");
+        }
+        update();
+        return;
+    }
+
     if (clipDrag_.active) {
         ClipDrag drag = clipDrag_;
         clipDrag_ = ClipDrag{};

@@ -21,7 +21,9 @@ class TrackPanel : public QWidget {
 public:
     // Select drags out a time range; Move drags whole clips along the
     // timeline and between tracks (Audacity's "time shift" tool).
-    enum class Tool { Select, Move };
+    // Select drags out a time range, Move time-shifts clips, Envelope edits a
+    // track's volume curve.
+    enum class Tool { Select, Move, Envelope };
 
     explicit TrackPanel(QWidget* parent = nullptr);
 
@@ -78,6 +80,10 @@ signals:
     // mutate the project itself -- MainWindow turns this into one undoable step.
     void clipsMoveRequested(const std::vector<ClipMove>& moves);
 
+    // A finished envelope edit: the track's complete new point list, which
+    // MainWindow turns into one undoable step.
+    void envelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& points, const QString& what);
+
     // Label interactions. As with clip moves, the panel doesn't mutate the
     // project or raise dialogs itself -- MainWindow owns both.
     void labelActivated(int labelIndex);
@@ -129,6 +135,12 @@ private:
     void drawLaneWaveform(class QPainter& painter, const Track& track, int laneTop, int w,
                            const QColor& waveColor, int trackIndex);
     void drawLabelStrip(class QPainter& painter, int w);
+    void drawEnvelope(class QPainter& painter, const Track& track, int laneTop, int w);
+    // Index of the envelope point near `pos` on `trackIndex`, or -1.
+    int envelopePointAt(int trackIndex, const QPoint& pos) const;
+    // Gain a click at `y` within a lane represents (top = unity, bottom = silence).
+    float gainForY(int laneTop, int y) const;
+    int yForGain(int laneTop, float gain) const;
     // Spectrogram for one lane: one FFT per pixel column, magnitude mapped to
     // colour. Computed on demand rather than cached -- see the note in the
     // implementation about when that stops being good enough.
@@ -177,6 +189,14 @@ private:
     };
     ClipDrag clipDrag_;
 
+    // In-flight envelope point drag.
+    struct EnvelopeDrag {
+        bool active = false;
+        int trackIndex = -1;
+        int pointIndex = -1;
+    };
+    EnvelopeDrag envelopeDrag_;
+
     // Clips picked out with the Move tool; a drag shifts all of them together.
     struct ClipRef {
         int track = -1;
@@ -196,6 +216,7 @@ private:
     static constexpr int kMaxLiveColumns = 2000;
     // Snap radius in pixels, so the feel stays the same at every zoom level.
     static constexpr int kSnapPixels = 8;
+    static constexpr int kEnvelopeHandleRadius = 5;
     // 512 samples is a deliberate compromise: enough frequency resolution to
     // read as a spectrogram, small enough that a full-width repaint stays
     // interactive when every column needs its own transform.

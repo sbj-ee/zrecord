@@ -171,6 +171,25 @@ private:
 // the tracks the move touches: rebuilding indices as clips are pulled out and
 // reinserted is fiddly enough that restoring a copy is both simpler and safer,
 // and the cost stays bounded by the tracks actually involved.
+// Envelope edits snapshot just the one track's point list -- it's a handful of
+// values, so restoring a copy is cheaper than reasoning about how an index
+// shifts when a point is inserted or removed.
+class EnvelopeEditCommand : public QUndoCommand {
+public:
+    EnvelopeEditCommand(Project& project, int trackIndex, std::vector<EnvelopePoint> after,
+                         const QString& text);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    Project& project_;
+    int trackIndex_;
+    std::vector<EnvelopePoint> before_;
+    std::vector<EnvelopePoint> after_;
+    bool captured_ = false;
+};
+
 class MoveClipsCommand : public QUndoCommand {
 public:
     MoveClipsCommand(Project& project, std::vector<ClipMove> moves);
