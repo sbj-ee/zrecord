@@ -19,6 +19,7 @@ pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
 add_library(zrecord_core STATIC
     src/AudioEngine.cpp
     src/Filters.cpp
+    src/Fft.cpp
     src/AudioFileWriter.cpp
     src/AudioFileReader.cpp
     src/Project.cpp

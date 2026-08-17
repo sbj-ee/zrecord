@@ -49,8 +49,13 @@ struct Clip {
     int64_t endFrame() const { return startFrame + frameCount(); }
 };
 
+// How a track's audio is drawn. Spectrogram is a view setting, not audio
+// state: it changes nothing about playback or export.
+enum class TrackDisplay { Waveform, Spectrogram };
+
 struct Track {
     std::string name;
+    TrackDisplay display = TrackDisplay::Waveform;
     std::vector<Clip> clips; // kept sorted by startFrame, non-overlapping
     bool muted = false;
     bool soloed = false;

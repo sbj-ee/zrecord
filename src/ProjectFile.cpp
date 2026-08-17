@@ -35,6 +35,7 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
         trackObj["muted"] = track.muted;
         trackObj["soloed"] = track.soloed;
         trackObj["gainDb"] = track.gainDb;
+        trackObj["display"] = track.display == TrackDisplay::Spectrogram ? "spectrogram" : "waveform";
 
         QJsonArray clipsArray;
         for (size_t c = 0; c < track.clips.size(); ++c) {
@@ -108,6 +109,8 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
         track.muted = trackObj["muted"].toBool();
         track.soloed = trackObj["soloed"].toBool();
         track.gainDb = trackObj["gainDb"].toDouble();
+        track.display = trackObj["display"].toString() == "spectrogram" ? TrackDisplay::Spectrogram
+                                                                        : TrackDisplay::Waveform;
 
         for (const QJsonValue& clipValue : trackObj["clips"].toArray()) {
             QJsonObject clipObj = clipValue.toObject();
