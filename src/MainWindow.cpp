@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "AudioEngine.h"
 #include "AudioFileReader.h"
 #include "AudioFileWriter.h"
 #include "Commands.h"
@@ -49,8 +50,11 @@ QString formatDuration(double seconds) {
 }
 } // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    engine_ = std::make_unique<AudioEngine>();
+MainWindow::MainWindow(QWidget* parent) : MainWindow(std::make_unique<AudioEngine>(), parent) {}
+
+MainWindow::MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* parent)
+    : QMainWindow(parent) {
+    engine_ = std::move(engine);
     undoStack_ = new QUndoStack(this);
     buildUi();
     refreshDevices();
