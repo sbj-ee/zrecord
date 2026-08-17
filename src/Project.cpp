@@ -60,6 +60,43 @@ int64_t Track::endFrame() const {
     return end;
 }
 
+float Track::envelopeGainAt(int64_t frame) const {
+    if (envelope.empty()) {
+        return 1.0f;
+    }
+    if (frame <= envelope.front().frame) {
+        return envelope.front().gain;
+    }
+    if (frame >= envelope.back().frame) {
+        return envelope.back().gain;
+    }
+
+    auto upper = std::lower_bound(envelope.begin(), envelope.end(), frame,
+                                   [](const EnvelopePoint& p, int64_t f) { return p.frame < f; });
+    if (upper == envelope.begin()) {
+        return upper->gain;
+    }
+    auto lower = upper - 1;
+    int64_t span = upper->frame - lower->frame;
+    if (span <= 0) {
+        return upper->gain;
+    }
+    double t = static_cast<double>(frame - lower->frame) / static_cast<double>(span);
+    return static_cast<float>(lower->gain + t * (upper->gain - lower->gain));
+}
+
+int Track::insertEnvelopePoint(const EnvelopePoint& point) {
+    auto pos = std::lower_bound(envelope.begin(), envelope.end(), point.frame,
+                                 [](const EnvelopePoint& p, int64_t f) { return p.frame < f; });
+    if (pos != envelope.end() && pos->frame == point.frame) {
+        pos->gain = point.gain; // one point per frame
+        return static_cast<int>(pos - envelope.begin());
+    }
+    int index = static_cast<int>(pos - envelope.begin());
+    envelope.insert(pos, point);
+    return index;
+}
+
 namespace {
 // Finds the (sorted) insertion point for a clip starting at `frame`.
 std::vector<Clip>::iterator insertionPoint(std::vector<Clip>& clips, int64_t frame) {
@@ -314,11 +351,15 @@ void Project::readMix(int64_t startFrame, int64_t frameCount, std::vector<float>
             int64_t overlapFrames = overlapEnd - overlapStart;
 
             for (int64_t f = 0; f < overlapFrames; ++f) {
+                // The envelope is sampled per frame rather than per block, so
+                // a steep curve doesn't step. Points are few, so the lookup is
+                // a short binary search.
+                float frameGain = gain * track.envelopeGainAt(overlapStart + f);
                 for (int c = 0; c < channels; ++c) {
                     size_t srcIndex = static_cast<size_t>(clipLocalStart + f) * channels + c;
                     size_t dstIndex = static_cast<size_t>(outLocalStart + f) * channels + c;
                     if (srcIndex < clip.samples.size() && dstIndex < out.size()) {
-                        out[dstIndex] += clip.samples[srcIndex] * gain;
+                        out[dstIndex] += clip.samples[srcIndex] * frameGain;
                     }
                 }
             }

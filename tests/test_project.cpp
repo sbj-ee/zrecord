@@ -46,6 +46,10 @@ private slots:
     void readMix_appliesGain();
     void readMix_respectsMuteAndSolo();
     void peakCache_reportsBlockMinMax();
+    void envelope_isUnityWhenEmpty();
+    void envelope_interpolatesAndHoldsAtTheEnds();
+    void envelope_replacesAPointAtTheSameFrame();
+    void readMix_appliesTheEnvelope();
     void crossfadeClips_mergesAndShortensTrack();
     void crossfadeClips_holdsEqualPowerAcrossTheJoin();
     void crossfadeClips_rejectsBadInputWithoutMutating();
@@ -247,6 +251,69 @@ void TestProject::peakCache_reportsBlockMinMax() {
     QCOMPARE(cache.blockAt(1).maxValue, 0.2f);
     // Out-of-range blocks must read as silence rather than run off the end.
     QCOMPARE(cache.blockAt(99).maxValue, 0.0f);
+}
+
+void TestProject::envelope_isUnityWhenEmpty() {
+    Track track;
+    QCOMPARE(track.envelopeGainAt(0), 1.0f);
+    QCOMPARE(track.envelopeGainAt(100000), 1.0f);
+}
+
+void TestProject::envelope_interpolatesAndHoldsAtTheEnds() {
+    Track track;
+    track.insertEnvelopePoint({100, 0.0f});
+    track.insertEnvelopePoint({200, 1.0f});
+
+    // Flat outside the outermost points rather than extrapolating to
+    // nonsense gains.
+    QCOMPARE(track.envelopeGainAt(0), 0.0f);
+    QCOMPARE(track.envelopeGainAt(100), 0.0f);
+    QCOMPARE(track.envelopeGainAt(200), 1.0f);
+    QCOMPARE(track.envelopeGainAt(5000), 1.0f);
+    // Linear in between.
+    QVERIFY(std::fabs(track.envelopeGainAt(150) - 0.5f) < 1e-5f);
+    QVERIFY(std::fabs(track.envelopeGainAt(125) - 0.25f) < 1e-5f);
+}
+
+void TestProject::envelope_replacesAPointAtTheSameFrame() {
+    Track track;
+    // Inserted out of order; the list must end up sorted.
+    track.insertEnvelopePoint({200, 0.5f});
+    track.insertEnvelopePoint({100, 0.25f});
+    QCOMPARE(track.envelope.size(), size_t(2));
+    QCOMPARE(track.envelope[0].frame, int64_t(100));
+
+    // A second point on the same frame updates rather than duplicating,
+    // otherwise the curve would have two values at one instant.
+    int index = track.insertEnvelopePoint({100, 0.75f});
+    QCOMPARE(index, 0);
+    QCOMPARE(track.envelope.size(), size_t(2));
+    QCOMPARE(track.envelope[0].gain, 0.75f);
+}
+
+void TestProject::readMix_appliesTheEnvelope() {
+    Project project;
+    project.channels = 1;
+    Track track;
+    Clip clip;
+    clip.channels = 1;
+    clip.startFrame = 0;
+    clip.samples.assign(4, 1.0f);
+    track.clips.push_back(std::move(clip));
+    // Ramp from silence to unity across the clip.
+    track.insertEnvelopePoint({0, 0.0f});
+    track.insertEnvelopePoint({3, 1.0f});
+    project.tracks.push_back(std::move(track));
+
+    std::vector<float> out(4, 0.0f);
+    project.readMix(0, 4, out);
+
+    QCOMPARE(out[0], 0.0f);
+    QVERIFY(std::fabs(out[3] - 1.0f) < 1e-5f);
+    // Strictly increasing, i.e. sampled per frame rather than per block.
+    for (size_t i = 1; i < out.size(); ++i) {
+        QVERIFY2(out[i] > out[i - 1], qPrintable(QString("frame %1 did not rise").arg(i)));
+    }
 }
 
 void TestProject::crossfadeClips_mergesAndShortensTrack() {

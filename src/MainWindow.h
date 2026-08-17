@@ -55,6 +55,7 @@ private slots:
     void onCrossfade();
     void onApplyEffect();
     void onSelectAll();
+    void onEnvelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& points, const QString& what);
     void onSelectionChanged();
     void onClipsMoveRequested(const std::vector<ClipMove>& moves);
     void onAddLabel();
@@ -122,6 +123,7 @@ private:
     // Mutually exclusive tool selection for the timeline.
     QAction* selectToolAction_ = nullptr;
     QAction* moveToolAction_ = nullptr;
+    QAction* envelopeToolAction_ = nullptr;
     QAction* snapAction_ = nullptr;
     QAction* addLabelAction_ = nullptr;
 

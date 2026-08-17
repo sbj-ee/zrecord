@@ -35,6 +35,14 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
         trackObj["muted"] = track.muted;
         trackObj["soloed"] = track.soloed;
         trackObj["gainDb"] = track.gainDb;
+        QJsonArray envelopeArray;
+        for (const EnvelopePoint& point : track.envelope) {
+            QJsonObject pointObj;
+            pointObj["frame"] = QString::number(point.frame);
+            pointObj["gain"] = point.gain;
+            envelopeArray.append(pointObj);
+        }
+        trackObj["envelope"] = envelopeArray;
         trackObj["display"] = track.display == TrackDisplay::Spectrogram ? "spectrogram" : "waveform";
 
         QJsonArray clipsArray;
@@ -109,6 +117,15 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
         track.muted = trackObj["muted"].toBool();
         track.soloed = trackObj["soloed"].toBool();
         track.gainDb = trackObj["gainDb"].toDouble();
+        for (const QJsonValue& pointValue : trackObj["envelope"].toArray()) {
+            QJsonObject pointObj = pointValue.toObject();
+            EnvelopePoint point;
+            point.frame = pointObj["frame"].toString().toLongLong();
+            point.gain = static_cast<float>(pointObj["gain"].toDouble(1.0));
+            track.envelope.push_back(point);
+        }
+        std::sort(track.envelope.begin(), track.envelope.end(),
+                  [](const EnvelopePoint& a, const EnvelopePoint& b) { return a.frame < b.frame; });
         track.display = trackObj["display"].toString() == "spectrogram" ? TrackDisplay::Spectrogram
                                                                         : TrackDisplay::Waveform;
 

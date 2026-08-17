@@ -141,13 +141,18 @@ void MainWindow::buildUi() {
     // F1/F5 match Audacity's bindings for the same two tools.
     selectToolAction_ = addTool("Select", "Select a time range", QKeySequence("F1"));
     moveToolAction_ = addTool("Move", "Drag clips along the timeline and between tracks", QKeySequence("F5"));
+    envelopeToolAction_ = addTool("Envelope", "Draw a volume curve on a track: click to add a point, "
+                                              "drag to move it, right-click to remove it",
+                                   QKeySequence("F2"));
     selectToolAction_->setCheckable(true);
     moveToolAction_->setCheckable(true);
+    envelopeToolAction_->setCheckable(true);
     selectToolAction_->setChecked(true);
     auto* toolGroup = new QActionGroup(this);
     toolGroup->setExclusive(true);
     toolGroup->addAction(selectToolAction_);
     toolGroup->addAction(moveToolAction_);
+    toolGroup->addAction(envelopeToolAction_);
 
     snapAction_ = addTool("Snap", "Snap dragged clips to clip edges, the playhead and zero (hold Alt to bypass)",
                            QKeySequence());
@@ -293,6 +298,7 @@ void MainWindow::buildUi() {
     rootLayout->addWidget(trackPanel_, 1);
     connect(trackPanel_, &TrackPanel::selectionChanged, this, &MainWindow::onSelectionChanged);
     connect(trackPanel_, &TrackPanel::clipsMoveRequested, this, &MainWindow::onClipsMoveRequested);
+    connect(trackPanel_, &TrackPanel::envelopeEdited, this, &MainWindow::onEnvelopeEdited);
     connect(trackPanel_, &TrackPanel::labelActivated, this, &MainWindow::onLabelActivated);
     connect(trackPanel_, &TrackPanel::labelContextMenuRequested, this, &MainWindow::onLabelContextMenu);
     connect(selectToolAction_, &QAction::triggered, this, [this] {
@@ -300,6 +306,9 @@ void MainWindow::buildUi() {
     });
     connect(moveToolAction_, &QAction::triggered, this, [this] {
         trackPanel_->setTool(TrackPanel::Tool::Move);
+    });
+    connect(envelopeToolAction_, &QAction::triggered, this, [this] {
+        trackPanel_->setTool(TrackPanel::Tool::Envelope);
     });
     connect(snapAction_, &QAction::toggled, this, [this](bool enabled) {
         trackPanel_->setSnapEnabled(enabled);
@@ -518,6 +527,7 @@ void MainWindow::buildMenus() {
     QMenu* viewMenu = menuBar()->addMenu("&View");
     viewMenu->addAction(selectToolAction_);
     viewMenu->addAction(moveToolAction_);
+    viewMenu->addAction(envelopeToolAction_);
     viewMenu->addAction(snapAction_);
     viewMenu->addSeparator();
     viewMenu->addAction(zoomInAction_);
@@ -1099,6 +1109,12 @@ void MainWindow::onSelectAll() {
     project_.selection.endFrame = end;
     trackPanel_->update();
     onSelectionChanged();
+}
+
+void MainWindow::onEnvelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& points,
+                                   const QString& what) {
+    undoStack_->push(new EnvelopeEditCommand(project_, trackIndex, points, what));
+    trackPanel_->update();
 }
 
 void MainWindow::onSelectionChanged() {
