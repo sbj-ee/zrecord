@@ -51,6 +51,7 @@ private slots:
     void onFadeOut();
     void onCrossfade();
     void onApplyEffect();
+    void onSelectAll();
     void onSelectionChanged();
     void onClipsMoveRequested(const std::vector<ClipMove>& moves);
     void onAddLabel();
@@ -123,6 +124,7 @@ private:
     QAction* exportAction_ = nullptr;
     QAction* applyEffectAction_ = nullptr;
     QAction* quitAction_ = nullptr;
+    QAction* selectAllAction_ = nullptr;
 
     // Recording cluster at the right of the toolbar: a blinking
     // "● REC hh:mm:ss" plus Stop and Mute controls. Hidden unless a take is
