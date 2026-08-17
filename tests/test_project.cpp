@@ -46,6 +46,9 @@ private slots:
     void readMix_appliesGain();
     void readMix_respectsMuteAndSolo();
     void peakCache_reportsBlockMinMax();
+    void crossfadeClips_mergesAndShortensTrack();
+    void crossfadeClips_holdsEqualPowerAcrossTheJoin();
+    void crossfadeClips_rejectsBadInputWithoutMutating();
 };
 
 void TestProject::splitClipAt_splitsInsideOnly() {
@@ -244,6 +247,77 @@ void TestProject::peakCache_reportsBlockMinMax() {
     QCOMPARE(cache.blockAt(1).maxValue, 0.2f);
     // Out-of-range blocks must read as silence rather than run off the end.
     QCOMPARE(cache.blockAt(99).maxValue, 0.0f);
+}
+
+void TestProject::crossfadeClips_mergesAndShortensTrack() {
+    Track track;
+    track.clips.push_back(makeRamp(0, 10));            // frames 0..9
+    track.clips.push_back(makeRamp(10, 10, 100.0f));   // frames 10..19, adjacent
+    track.clips.push_back(makeRamp(30, 4, 500.0f));    // a later clip that must ripple
+
+    QVERIFY(Project::crossfadeClips(track, 0, 4, 1));
+
+    // The pair becomes one clip, 4 frames shorter than the two combined.
+    QCOMPARE(track.clips.size(), size_t(2));
+    QCOMPARE(track.clips[0].startFrame, int64_t(0));
+    QCOMPARE(track.clips[0].frameCount(), int64_t(16));
+    // Material outside the overlap is untouched on both sides.
+    QCOMPARE(track.clips[0].samples.front(), 1.0f);          // A's head
+    QCOMPARE(track.clips[0].samples.back(), 109.0f);         // B's tail
+    // Everything after the join slides left by the crossfade length.
+    QCOMPARE(track.clips[1].startFrame, int64_t(26));
+    QCOMPARE(track.endFrame(), int64_t(30));
+}
+
+void TestProject::crossfadeClips_holdsEqualPowerAcrossTheJoin() {
+    // Measure the two gain ramps separately: crossfading a unit signal against
+    // silence leaves the outgoing ramp, and silence against a unit signal
+    // leaves the incoming one.
+    auto rampFor = [](float aValue, float bValue) {
+        Track track;
+        Clip a; a.channels = 1; a.startFrame = 0; a.samples.assign(6, aValue);
+        Clip b; b.channels = 1; b.startFrame = 6; b.samples.assign(6, bValue);
+        track.clips.push_back(std::move(a));
+        track.clips.push_back(std::move(b));
+        Project::crossfadeClips(track, 0, 6, 1);
+        return track.clips[0].samples;
+    };
+
+    const std::vector<float> outgoing = rampFor(1.0f, 0.0f);
+    const std::vector<float> incoming = rampFor(0.0f, 1.0f);
+    QCOMPARE(outgoing.size(), size_t(6));
+    QCOMPARE(incoming.size(), size_t(6));
+
+    // Equal power means the two gains satisfy out^2 + in^2 == 1 at every step.
+    // (A linear crossfade would instead satisfy out + in == 1, and lose ~3 dB
+    // in the middle for uncorrelated material.)
+    for (size_t i = 0; i < outgoing.size(); ++i) {
+        float power = outgoing[i] * outgoing[i] + incoming[i] * incoming[i];
+        QVERIFY2(std::fabs(power - 1.0f) < 1e-4f,
+                 qPrintable(QString("power %1 at frame %2").arg(power).arg(i)));
+    }
+    // And the ramps actually run in opposite directions.
+    QVERIFY(outgoing.front() > outgoing.back());
+    QVERIFY(incoming.front() < incoming.back());
+}
+
+void TestProject::crossfadeClips_rejectsBadInputWithoutMutating() {
+    Track track;
+    track.clips.push_back(makeRamp(0, 10));
+    track.clips.push_back(makeRamp(20, 10, 100.0f)); // gap: not adjacent
+    const auto before = track.clips;
+
+    QVERIFY(!Project::crossfadeClips(track, 0, 4, 1));   // gap between clips
+    QVERIFY(!Project::crossfadeClips(track, 1, 4, 1));   // no clip after the last
+    QVERIFY(!Project::crossfadeClips(track, 0, 0, 1));   // zero-length crossfade
+
+    // Close the gap, then ask for more frames than a clip holds.
+    track.clips[1].startFrame = 10;
+    QVERIFY(!Project::crossfadeClips(track, 0, 50, 1));
+
+    QCOMPARE(track.clips.size(), before.size());
+    QCOMPARE(track.clips[0].samples, before[0].samples);
+    QCOMPARE(track.clips[1].samples, before[1].samples);
 }
 
 QTEST_GUILESS_MAIN(TestProject)

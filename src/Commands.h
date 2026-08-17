@@ -101,6 +101,22 @@ private:
     int channels_;
 };
 
+// Crossfades a clip into the one after it. The pair merges into a single
+// clip, so the track shortens by the crossfade length and later clips ripple
+// left -- see Project::crossfadeClips for why merging beats overlapping.
+class CrossfadeCommand : public TrackEditCommand {
+public:
+    CrossfadeCommand(Project& project, int trackIndex, int firstClipIndex, int64_t frames, int channels);
+
+protected:
+    void apply() override;
+
+private:
+    int firstClipIndex_;
+    int64_t frames_;
+    int channels_;
+};
+
 // Inserts audio at a given frame, rippling later clips right. Used for
 // pasting the clipboard.
 class PasteCommand : public TrackEditCommand {

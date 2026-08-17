@@ -49,6 +49,7 @@ private slots:
     void onSilenceSelection();
     void onFadeIn();
     void onFadeOut();
+    void onCrossfade();
     void onApplyEffect();
     void onSelectionChanged();
     void onClipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame);
@@ -101,6 +102,7 @@ private:
     QAction* silenceAction_ = nullptr;
     QAction* fadeInAction_ = nullptr;
     QAction* fadeOutAction_ = nullptr;
+    QAction* crossfadeAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* zoomInAction_ = nullptr;

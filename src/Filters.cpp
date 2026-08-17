@@ -368,4 +368,26 @@ void applyLinearFade(std::vector<float>& interleaved, int channels, FadeShape sh
     }
 }
 
+void mixEqualPowerCrossfade(std::vector<float>& outgoing, const std::vector<float>& incoming, int channels) {
+    if (channels <= 0 || outgoing.empty() || outgoing.size() != incoming.size()) {
+        return;
+    }
+    size_t frameCount = outgoing.size() / static_cast<size_t>(channels);
+    if (frameCount == 0) {
+        return;
+    }
+    double lastFrame = frameCount > 1 ? static_cast<double>(frameCount - 1) : 1.0;
+
+    for (size_t frame = 0; frame < frameCount; ++frame) {
+        double position = frameCount > 1 ? static_cast<double>(frame) / lastFrame : 1.0;
+        // cos/sin keep gainOut^2 + gainIn^2 == 1 across the whole ramp.
+        float gainOut = static_cast<float>(std::cos(position * M_PI / 2.0));
+        float gainIn = static_cast<float>(std::sin(position * M_PI / 2.0));
+        for (int c = 0; c < channels; ++c) {
+            size_t i = frame * static_cast<size_t>(channels) + static_cast<size_t>(c);
+            outgoing[i] = outgoing[i] * gainOut + incoming[i] * gainIn;
+        }
+    }
+}
+
 } // namespace zrecord

@@ -1,5 +1,7 @@
 #include "Project.h"
 
+#include "Filters.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -201,6 +203,61 @@ void Project::appendClip(Track& track, const std::vector<float>& samples, int ch
     clip.samples = samples;
     clip.peaks.build(clip.samples, channels);
     track.clips.push_back(std::move(clip));
+}
+
+bool Project::crossfadeClips(Track& track, int firstClipIndex, int64_t frames, int channels) {
+    if (channels <= 0 || frames <= 0 || firstClipIndex < 0) {
+        return false;
+    }
+    if (static_cast<size_t>(firstClipIndex) + 1 >= track.clips.size()) {
+        return false;
+    }
+
+    Clip& a = track.clips[static_cast<size_t>(firstClipIndex)];
+    Clip& b = track.clips[static_cast<size_t>(firstClipIndex) + 1];
+    if (a.endFrame() != b.startFrame) {
+        return false; // a gap between them makes the overlap ambiguous
+    }
+    int64_t aLen = a.frameCount();
+    int64_t bLen = b.frameCount();
+    if (aLen < frames || bLen < frames) {
+        return false;
+    }
+
+    const size_t ch = static_cast<size_t>(channels);
+    Clip merged;
+    merged.channels = channels;
+    merged.startFrame = a.startFrame;
+    merged.samples.resize(static_cast<size_t>(aLen + bLen - frames) * ch);
+
+    // Everything of A before the overlap.
+    std::copy(a.samples.begin(), a.samples.begin() + static_cast<long>(aLen - frames) * channels,
+              merged.samples.begin());
+
+    // The overlap: A's tail faded out against B's head faded in.
+    std::vector<float> overlap(a.samples.begin() + static_cast<long>(aLen - frames) * channels,
+                                a.samples.end());
+    std::vector<float> incoming(b.samples.begin(),
+                                 b.samples.begin() + static_cast<long>(frames) * channels);
+    mixEqualPowerCrossfade(overlap, incoming, channels);
+    std::copy(overlap.begin(), overlap.end(),
+              merged.samples.begin() + static_cast<long>(aLen - frames) * channels);
+
+    // Whatever of B is left after the overlap.
+    std::copy(b.samples.begin() + static_cast<long>(frames) * channels, b.samples.end(),
+              merged.samples.begin() + static_cast<long>(aLen) * channels);
+
+    merged.peaks.build(merged.samples, channels);
+
+    track.clips.erase(track.clips.begin() + firstClipIndex,
+                      track.clips.begin() + firstClipIndex + 2);
+    track.clips.insert(track.clips.begin() + firstClipIndex, std::move(merged));
+
+    // The pair now occupies `frames` fewer frames, so everything after shifts.
+    for (size_t i = static_cast<size_t>(firstClipIndex) + 1; i < track.clips.size(); ++i) {
+        track.clips[i].startFrame -= frames;
+    }
+    return true;
 }
 
 int Project::insertLabel(const Label& label) {
