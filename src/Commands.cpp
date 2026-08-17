@@ -95,8 +95,13 @@ AppendClipCommand::AppendClipCommand(Project& project, int trackIndex, std::vect
     : TrackEditCommand(project, trackIndex, text), samples_(std::move(samples)), channels_(channels) {}
 
 void AppendClipCommand::apply() {
+    // Park the playhead at the start of what was just added, so Play
+    // auditions it immediately. Leaving it at the end would make Play look
+    // broken, and buys nothing: appendClip always places a take at the
+    // track's end regardless of where the playhead sits.
+    int64_t appendedAt = track().endFrame();
     Project::appendClip(track(), samples_, channels_);
-    project().playheadFrame = track().endFrame();
+    project().playheadFrame = appendedAt;
 }
 
 namespace {
