@@ -41,6 +41,8 @@ private slots:
     void addAndRemoveTrack_roundTrip();
     void undoRedo_isRepeatable();
 
+    void appendClip_leavesPlayheadAtStartOfTheNewClip();
+
     void addLabel_keepsLabelsSortedByStart();
     void addLabel_undoRemovesTheRightOne();
     void removeLabel_undoRestoresAtSameIndex();
@@ -162,6 +164,22 @@ void TestCommands::undoRedo_isRepeatable() {
         stack_.redo();
         QCOMPARE(snapshot(project_, 0, 4), after);
     }
+}
+
+void TestCommands::appendClip_leavesPlayheadAtStartOfTheNewClip() {
+    // Track 1 already holds frames 0..5 from init().
+    project_.playheadFrame = 99;
+
+    stack_.push(new AppendClipCommand(project_, 0, std::vector<float>{7.0f, 8.0f}, 1, "Record"));
+
+    // The playhead lands on the take just added, not past it, so Play
+    // auditions the new audio rather than appearing to do nothing.
+    QCOMPARE(project_.playheadFrame, int64_t(6));
+    QCOMPARE(project_.tracks[0].endFrame(), int64_t(8));
+
+    // A second take parks at its own start, not at the first one's.
+    stack_.push(new AppendClipCommand(project_, 0, std::vector<float>{9.0f}, 1, "Record"));
+    QCOMPARE(project_.playheadFrame, int64_t(8));
 }
 
 namespace {
