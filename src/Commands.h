@@ -30,6 +30,8 @@ protected:
 
     Selection selectionBefore_;
     Selection selectionAfter_;
+    int64_t playheadBefore_ = 0;
+    int64_t playheadAfter_ = 0;
 
 private:
     Project& project_;
