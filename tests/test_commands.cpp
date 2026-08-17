@@ -43,6 +43,9 @@ private slots:
 
     void appendClip_leavesPlayheadAtStartOfTheNewClip();
 
+    void moveClips_movesWholeSetAndUndoRestoresAll();
+    void moveClips_acrossTracksKeepsTargetSorted();
+
     void addLabel_keepsLabelsSortedByStart();
     void addLabel_undoRemovesTheRightOne();
     void removeLabel_undoRestoresAtSameIndex();
@@ -180,6 +183,57 @@ void TestCommands::appendClip_leavesPlayheadAtStartOfTheNewClip() {
     // A second take parks at its own start, not at the first one's.
     stack_.push(new AppendClipCommand(project_, 0, std::vector<float>{9.0f}, 1, "Record"));
     QCOMPARE(project_.playheadFrame, int64_t(8));
+}
+
+void TestCommands::moveClips_movesWholeSetAndUndoRestoresAll() {
+    // Two more clips after the one init() puts at 0..5.
+    project_.tracks[0].clips.push_back(makeRamp(10, 4, 100.0f));
+    project_.tracks[0].clips.push_back(makeRamp(20, 4, 200.0f));
+
+    std::vector<ClipMove> moves{
+        ClipMove{0, 1, 0, 15},  // 10 -> 15
+        ClipMove{0, 2, 0, 25},  // 20 -> 25
+    };
+    stack_.push(new MoveClipsCommand(project_, moves));
+
+    QCOMPARE(project_.tracks[0].clips.size(), size_t(3));
+    QCOMPARE(project_.tracks[0].clips[0].startFrame, int64_t(0));
+    QCOMPARE(project_.tracks[0].clips[1].startFrame, int64_t(15));
+    QCOMPARE(project_.tracks[0].clips[2].startFrame, int64_t(25));
+    // The audio must travel with each clip, not just the positions.
+    QCOMPARE(project_.tracks[0].clips[1].samples.front(), 100.0f);
+    QCOMPARE(project_.tracks[0].clips[2].samples.front(), 200.0f);
+
+    stack_.undo();
+    QCOMPARE(project_.tracks[0].clips[1].startFrame, int64_t(10));
+    QCOMPARE(project_.tracks[0].clips[2].startFrame, int64_t(20));
+    QCOMPARE(project_.tracks[0].clips[1].samples.front(), 100.0f);
+}
+
+void TestCommands::moveClips_acrossTracksKeepsTargetSorted() {
+    project_.tracks[0].clips.push_back(makeRamp(10, 4, 100.0f));
+    // Track 2 already holds something the arrivals must sort around.
+    project_.tracks[1].clips.push_back(makeRamp(50, 4, 900.0f));
+
+    std::vector<ClipMove> moves{
+        ClipMove{0, 0, 1, 100}, // lands after the sitting clip
+        ClipMove{0, 1, 1, 20},  // lands before it
+    };
+    stack_.push(new MoveClipsCommand(project_, moves));
+
+    QCOMPARE(project_.tracks[0].clips.size(), size_t(0));
+    QCOMPARE(project_.tracks[1].clips.size(), size_t(3));
+    // Arrivals are spliced into sorted order, not appended.
+    QCOMPARE(project_.tracks[1].clips[0].startFrame, int64_t(20));
+    QCOMPARE(project_.tracks[1].clips[1].startFrame, int64_t(50));
+    QCOMPARE(project_.tracks[1].clips[2].startFrame, int64_t(100));
+    QCOMPARE(project_.tracks[1].clips[1].samples.front(), 900.0f); // the sitting clip
+
+    stack_.undo();
+    QCOMPARE(project_.tracks[0].clips.size(), size_t(2));
+    QCOMPARE(project_.tracks[1].clips.size(), size_t(1));
+    QCOMPARE(project_.tracks[0].clips[0].startFrame, int64_t(0));
+    QCOMPARE(project_.tracks[1].clips[0].startFrame, int64_t(50));
 }
 
 namespace {

@@ -90,6 +90,70 @@ int TrackPanel::clipIndexAt(int trackIndex, int64_t frame) const {
     return -1;
 }
 
+bool TrackPanel::isClipSelected(int trackIndex, int clipIndex) const {
+    for (const ClipRef& ref : selectedClips_) {
+        if (ref.track == trackIndex && ref.index == clipIndex) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<ClipMove> TrackPanel::computeMoves(int64_t deltaFrames, int deltaTracks) const {
+    std::vector<ClipMove> moves;
+    if (project_ == nullptr) {
+        return moves;
+    }
+    for (const ClipRef& ref : selectedClips_) {
+        if (ref.track < 0 || ref.track >= static_cast<int>(project_->tracks.size())) {
+            return {};
+        }
+        const Track& track = project_->tracks[static_cast<size_t>(ref.track)];
+        if (ref.index < 0 || ref.index >= static_cast<int>(track.clips.size())) {
+            return {};
+        }
+        ClipMove move;
+        move.fromTrack = ref.track;
+        move.clipIndex = ref.index;
+        move.toTrack = ref.track + deltaTracks;
+        move.newStartFrame = track.clips[static_cast<size_t>(ref.index)].startFrame + deltaFrames;
+        // The whole set moves rigidly, so one clip falling off the start or
+        // past the last track invalidates the entire drag.
+        if (move.toTrack < 0 || move.toTrack >= static_cast<int>(project_->tracks.size()) ||
+            move.newStartFrame < 0) {
+            return {};
+        }
+        moves.push_back(move);
+    }
+    return moves;
+}
+
+bool TrackPanel::movesAreValid(const std::vector<ClipMove>& moves) const {
+    if (project_ == nullptr || moves.empty()) {
+        return false;
+    }
+    for (const ClipMove& move : moves) {
+        const Clip& moving =
+            project_->tracks[static_cast<size_t>(move.fromTrack)].clips[static_cast<size_t>(move.clipIndex)];
+        int64_t start = move.newStartFrame;
+        int64_t end = start + moving.frameCount();
+
+        const Track& target = project_->tracks[static_cast<size_t>(move.toTrack)];
+        for (size_t i = 0; i < target.clips.size(); ++i) {
+            // Clips that are themselves moving vacate their old spot, so they
+            // can't block the drag.
+            if (isClipSelected(move.toTrack, static_cast<int>(i))) {
+                continue;
+            }
+            const Clip& other = target.clips[i];
+            if (start < other.endFrame() && other.startFrame < end) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool TrackPanel::canPlaceClip(int trackIndex, int64_t start, int64_t length, const Clip* excludeClip) const {
     if (project_ == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(project_->tracks.size())) {
         return false;
@@ -332,12 +396,12 @@ void accumulateClip(const Clip& clip, int64_t frameStart, int64_t frameEnd, int6
 } // namespace
 
 PeakCache::MinMax TrackPanel::computeColumn(const Track& track, int64_t frameStart, int64_t frameEnd,
-                                             const Clip* skipClip) const {
+                                             const std::vector<const Clip*>& skipClips) const {
     float minValue = 0.0f;
     float maxValue = 0.0f;
     bool first = true;
     for (const auto& clip : track.clips) {
-        if (&clip == skipClip) continue;
+        if (std::find(skipClips.begin(), skipClips.end(), &clip) != skipClips.end()) continue;
         accumulateClip(clip, frameStart, frameEnd, 0, minValue, maxValue, first);
     }
     return {minValue, maxValue};
@@ -353,29 +417,42 @@ PeakCache::MinMax TrackPanel::computeClipColumn(const Clip& clip, int64_t frameS
 }
 
 void TrackPanel::drawClipDragPreview(QPainter& painter, int w) {
-    const Clip* clip = draggedClip();
-    if (clip == nullptr || clipDrag_.targetTrack < 0) {
+    if (!clipDrag_.active || project_ == nullptr || clipDrag_.preview.empty()) {
         return;
     }
 
-    int laneTop = lanesTop() + clipDrag_.targetTrack * kLaneHeight;
-    int midY = laneTop + kLaneHeight / 2;
-    int usableHalfHeight = kLaneHeight / 2 - 6;
-
-    int xStart = std::max(kHeaderWidth, xAtFrame(clipDrag_.previewStartFrame));
-    int xEnd = std::min(w, xAtFrame(clipDrag_.previewStartFrame + clip->frameCount()));
-
-    // Green while the drop is legal, red once it would overlap a neighbour.
     QColor tint = clipDrag_.valid ? QColor(80, 210, 130, 40) : QColor(220, 70, 70, 50);
     QColor wave = clipDrag_.valid ? QColor(150, 245, 190) : QColor(255, 140, 140);
-    if (xEnd > xStart) {
-        painter.fillRect(xStart, laneTop, xEnd - xStart, kLaneHeight, tint);
-        painter.setPen(wave.darker(140));
-        painter.drawRect(xStart, laneTop, xEnd - xStart - 1, kLaneHeight - 1);
+
+    for (const ClipMove& move : clipDrag_.preview) {
+        const Clip& clip =
+            project_->tracks[static_cast<size_t>(move.fromTrack)].clips[static_cast<size_t>(move.clipIndex)];
+        int laneTop = lanesTop() + move.toTrack * kLaneHeight;
+        int midY = laneTop + kLaneHeight / 2;
+        int usableHalfHeight = kLaneHeight / 2 - 6;
+
+        int xStart = std::max(kHeaderWidth, xAtFrame(move.newStartFrame));
+        int xEnd = std::min(w, xAtFrame(move.newStartFrame + clip.frameCount()));
+        if (xEnd > xStart) {
+            painter.fillRect(xStart, laneTop, xEnd - xStart, kLaneHeight, tint);
+            painter.setPen(wave.darker(140));
+            painter.drawRect(xStart, laneTop, xEnd - xStart - 1, kLaneHeight - 1);
+        }
+
+        int64_t shift = move.newStartFrame - clip.startFrame;
+        painter.setPen(wave);
+        for (int x = std::max(kHeaderWidth, xStart); x < xEnd; ++x) {
+            int64_t frameStart = frameAtX(x);
+            int64_t frameEnd = frameAtX(x + 1);
+            if (frameEnd <= frameStart) frameEnd = frameStart + 1;
+            auto mm = computeClipColumn(clip, frameStart, frameEnd, shift);
+            int yTop = midY - static_cast<int>(std::clamp(mm.maxValue, -1.0f, 1.0f) * usableHalfHeight);
+            int yBottom = midY - static_cast<int>(std::clamp(mm.minValue, -1.0f, 1.0f) * usableHalfHeight);
+            painter.drawLine(x, yTop, x, yBottom);
+        }
     }
 
-    // Guide line marking what the drag latched onto, drawn the full height of
-    // the lane area so an alignment across tracks is visible.
+    // Guide line marking what the drag latched onto.
     if (clipDrag_.snapped) {
         int snapX = xAtFrame(clipDrag_.snapFrame);
         if (snapX >= kHeaderWidth && snapX <= w) {
@@ -383,18 +460,6 @@ void TrackPanel::drawClipDragPreview(QPainter& painter, int w) {
             painter.setPen(QPen(QColor(255, 214, 0), 1, Qt::DashLine));
             painter.drawLine(snapX, lanesTop(), snapX, lanesBottom);
         }
-    }
-
-    int64_t shift = clipDrag_.previewStartFrame - clip->startFrame;
-    painter.setPen(wave);
-    for (int x = std::max(kHeaderWidth, xStart); x < xEnd; ++x) {
-        int64_t frameStart = frameAtX(x);
-        int64_t frameEnd = frameAtX(x + 1);
-        if (frameEnd <= frameStart) frameEnd = frameStart + 1;
-        auto mm = computeClipColumn(*clip, frameStart, frameEnd, shift);
-        int yTop = midY - static_cast<int>(std::clamp(mm.maxValue, -1.0f, 1.0f) * usableHalfHeight);
-        int yBottom = midY - static_cast<int>(std::clamp(mm.minValue, -1.0f, 1.0f) * usableHalfHeight);
-        painter.drawLine(x, yTop, x, yBottom);
     }
 }
 
@@ -413,15 +478,27 @@ const Clip* TrackPanel::draggedClip() const {
 }
 
 void TrackPanel::drawLaneWaveform(QPainter& painter, const Track& track, int laneTop, int w,
-                                   const QColor& waveColor, const Clip* skipClip) {
+                                   const QColor& waveColor, int trackIndex) {
     int midY = laneTop + kLaneHeight / 2;
     int usableHalfHeight = kLaneHeight / 2 - 6;
+
+    // Clips being dragged are lifted out of their own lane and redrawn at the
+    // preview position, so every one of them is skipped here.
+    std::vector<const Clip*> lifted;
+    if (clipDrag_.active) {
+        for (const ClipMove& move : clipDrag_.preview) {
+            if (move.fromTrack == trackIndex) {
+                lifted.push_back(&track.clips[static_cast<size_t>(move.clipIndex)]);
+            }
+        }
+    }
+
     painter.setPen(waveColor);
     for (int x = kHeaderWidth; x < w; ++x) {
         int64_t frameStart = frameAtX(x);
         int64_t frameEnd = frameAtX(x + 1);
         if (frameEnd <= frameStart) frameEnd = frameStart + 1;
-        auto mm = computeColumn(track, frameStart, frameEnd, skipClip);
+        auto mm = computeColumn(track, frameStart, frameEnd, lifted);
         int yTop = midY - static_cast<int>(std::clamp(mm.maxValue, -1.0f, 1.0f) * usableHalfHeight);
         int yBottom = midY - static_cast<int>(std::clamp(mm.minValue, -1.0f, 1.0f) * usableHalfHeight);
         painter.drawLine(x, yTop, x, yBottom);
@@ -591,9 +668,23 @@ void TrackPanel::paintEvent(QPaintEvent*) {
         } else {
             // A clip mid-drag is lifted out of its own lane and redrawn at the
             // preview position below, so it appears to follow the cursor.
-            const Clip* dragged = draggedClip();
-            const Clip* skip = (dragged != nullptr && clipDrag_.sourceTrack == static_cast<int>(i)) ? dragged : nullptr;
-            drawLaneWaveform(painter, track, laneTop, w, waveColor, skip);
+            drawLaneWaveform(painter, track, laneTop, w, waveColor, static_cast<int>(i));
+
+            // Outline clips picked out with the Move tool, so it's visible
+            // which ones a drag will carry.
+            for (size_t c = 0; c < track.clips.size(); ++c) {
+                if (!isClipSelected(static_cast<int>(i), static_cast<int>(c))) {
+                    continue;
+                }
+                const Clip& sel = track.clips[c];
+                int xStart = std::max(kHeaderWidth, xAtFrame(sel.startFrame));
+                int xEnd = std::min(w, xAtFrame(sel.endFrame()));
+                if (xEnd > xStart) {
+                    painter.fillRect(xStart, laneTop, xEnd - xStart, kLaneHeight, QColor(120, 180, 255, 30));
+                    painter.setPen(QPen(QColor(120, 180, 255), 1));
+                    painter.drawRect(xStart, laneTop, xEnd - xStart - 1, kLaneHeight - 1);
+                }
+            }
         }
 
         if (!project_->selection.isEmpty() && project_->selection.trackIndex == static_cast<int>(i)) {
@@ -624,8 +715,26 @@ void TrackPanel::mousePressEvent(QMouseEvent* event) {
         int64_t frame = frameAtX(event->pos().x());
         int clipIndex = clipIndexAt(lane, frame);
         if (clipIndex < 0) {
-            return; // nothing to grab here
+            selectedClips_.clear(); // clicking empty space drops the selection
+            update();
+            return;
         }
+        if (event->modifiers() & Qt::ControlModifier) {
+            // Ctrl toggles membership so a set can be built up or trimmed.
+            auto it = std::find_if(selectedClips_.begin(), selectedClips_.end(),
+                                    [&](const ClipRef& r) { return r.track == lane && r.index == clipIndex; });
+            if (it != selectedClips_.end()) {
+                selectedClips_.erase(it);
+                update();
+                return;
+            }
+            selectedClips_.push_back(ClipRef{lane, clipIndex});
+        } else if (!isClipSelected(lane, clipIndex)) {
+            // Grabbing an unselected clip starts a fresh single-clip selection;
+            // grabbing one already in the set keeps the set so it drags whole.
+            selectedClips_.assign(1, ClipRef{lane, clipIndex});
+        }
+
         const Clip& clip = project_->tracks[static_cast<size_t>(lane)].clips[static_cast<size_t>(clipIndex)];
         clipDrag_ = ClipDrag{};
         clipDrag_.active = true;
@@ -635,6 +744,7 @@ void TrackPanel::mousePressEvent(QMouseEvent* event) {
         clipDrag_.origStartFrame = clip.startFrame;
         clipDrag_.targetTrack = lane;
         clipDrag_.previewStartFrame = clip.startFrame;
+        clipDrag_.preview = computeMoves(0, 0);
         setCursor(Qt::ClosedHandCursor);
         update();
         return;
@@ -667,8 +777,26 @@ void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
 
         int lane = laneIndexAtY(event->pos().y());
         clipDrag_.targetTrack = lane >= 0 ? lane : clipDrag_.sourceTrack;
-        clipDrag_.valid = canPlaceClip(clipDrag_.targetTrack, clipDrag_.previewStartFrame,
-                                        clip.frameCount(), &clip);
+
+        // The grabbed clip defines the shift; every selected clip follows it.
+        int64_t deltaFrames = clipDrag_.previewStartFrame - clipDrag_.origStartFrame;
+        // Clamp so the earliest clip in the set stops at zero rather than the
+        // whole drag becoming invalid and appearing to do nothing.
+        int64_t earliest = std::numeric_limits<int64_t>::max();
+        for (const ClipRef& ref : selectedClips_) {
+            if (ref.track >= 0 && ref.track < static_cast<int>(project_->tracks.size())) {
+                const Track& t = project_->tracks[static_cast<size_t>(ref.track)];
+                if (ref.index >= 0 && ref.index < static_cast<int>(t.clips.size())) {
+                    earliest = std::min(earliest, t.clips[static_cast<size_t>(ref.index)].startFrame);
+                }
+            }
+        }
+        if (earliest != std::numeric_limits<int64_t>::max()) {
+            deltaFrames = std::max(deltaFrames, -earliest);
+        }
+        int deltaTracks = clipDrag_.targetTrack - clipDrag_.sourceTrack;
+        clipDrag_.preview = computeMoves(deltaFrames, deltaTracks);
+        clipDrag_.valid = movesAreValid(clipDrag_.preview);
         update();
         return;
     }
@@ -688,9 +816,9 @@ void TrackPanel::mouseReleaseEvent(QMouseEvent*) {
         setCursor(tool_ == Tool::Move ? Qt::OpenHandCursor : Qt::ArrowCursor);
 
         bool moved = drag.targetTrack != drag.sourceTrack || drag.previewStartFrame != drag.origStartFrame;
-        if (drag.valid && moved) {
-            emit clipMoveRequested(drag.sourceTrack, drag.clipIndex, drag.targetTrack,
-                                    static_cast<qint64>(drag.previewStartFrame));
+        if (drag.valid && moved && !drag.preview.empty()) {
+            emit clipsMoveRequested(drag.preview);
+            selectedClips_.clear(); // indices no longer mean anything after the move
         }
         update();
         return;

@@ -161,6 +161,77 @@ void MoveClipCommand::undo() {
     project_.selection.clear();
 }
 
+MoveClipsCommand::MoveClipsCommand(Project& project, std::vector<ClipMove> moves)
+    : QUndoCommand(moves.size() > 1 ? "Move Clips" : "Move Clip"),
+      project_(project),
+      moves_(std::move(moves)) {
+    for (const ClipMove& move : moves_) {
+        for (int track : {move.fromTrack, move.toTrack}) {
+            if (std::find(affectedTracks_.begin(), affectedTracks_.end(), track) == affectedTracks_.end()) {
+                affectedTracks_.push_back(track);
+            }
+        }
+    }
+    std::sort(affectedTracks_.begin(), affectedTracks_.end());
+}
+
+void MoveClipsCommand::restore(const std::vector<Track>& snapshot) {
+    for (size_t i = 0; i < affectedTracks_.size(); ++i) {
+        project_.tracks[static_cast<size_t>(affectedTracks_[i])] = snapshot[i];
+    }
+}
+
+void MoveClipsCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    if (after_.has_value()) {
+        restore(*after_);
+        project_.selection.clear();
+        return;
+    }
+
+    before_.clear();
+    for (int track : affectedTracks_) {
+        before_.push_back(project_.tracks[static_cast<size_t>(track)]);
+    }
+
+    // Lift every clip out first, removing from the back of each track so the
+    // indices in `moves_` stay valid while we work.
+    std::vector<ClipMove> ordered = moves_;
+    std::sort(ordered.begin(), ordered.end(), [](const ClipMove& a, const ClipMove& b) {
+        if (a.fromTrack != b.fromTrack) return a.fromTrack > b.fromTrack;
+        return a.clipIndex > b.clipIndex;
+    });
+
+    std::vector<std::pair<Clip, ClipMove>> lifted;
+    lifted.reserve(ordered.size());
+    for (const ClipMove& move : ordered) {
+        Track& from = project_.tracks[static_cast<size_t>(move.fromTrack)];
+        Clip clip = std::move(from.clips[static_cast<size_t>(move.clipIndex)]);
+        from.clips.erase(from.clips.begin() + move.clipIndex);
+        lifted.emplace_back(std::move(clip), move);
+    }
+
+    for (auto& entry : lifted) {
+        entry.first.startFrame = entry.second.newStartFrame;
+        Track& to = project_.tracks[static_cast<size_t>(entry.second.toTrack)];
+        auto pos = std::lower_bound(to.clips.begin(), to.clips.end(), entry.first.startFrame,
+                                     [](const Clip& c, int64_t f) { return c.startFrame < f; });
+        to.clips.insert(pos, std::move(entry.first));
+    }
+
+    after_.emplace();
+    for (int track : affectedTracks_) {
+        after_->push_back(project_.tracks[static_cast<size_t>(track)]);
+    }
+    project_.selection.clear();
+}
+
+void MoveClipsCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    restore(before_);
+    project_.selection.clear();
+}
+
 AddLabelCommand::AddLabelCommand(Project& project, Label label)
     : QUndoCommand("Add Label"), project_(project), label_(std::move(label)) {}
 

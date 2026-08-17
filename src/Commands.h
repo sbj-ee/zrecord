@@ -165,6 +165,27 @@ private:
     int insertedIndex_ = -1; // where the clip landed, so undo can find it again
 };
 
+// Moves any number of clips at once, possibly between tracks. Snapshots only
+// the tracks the move touches: rebuilding indices as clips are pulled out and
+// reinserted is fiddly enough that restoring a copy is both simpler and safer,
+// and the cost stays bounded by the tracks actually involved.
+class MoveClipsCommand : public QUndoCommand {
+public:
+    MoveClipsCommand(Project& project, std::vector<ClipMove> moves);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    void restore(const std::vector<Track>& snapshot);
+
+    Project& project_;
+    std::vector<ClipMove> moves_;
+    std::vector<int> affectedTracks_;
+    std::vector<Track> before_;
+    std::optional<std::vector<Track>> after_;
+};
+
 class AddLabelCommand : public QUndoCommand {
 public:
     AddLabelCommand(Project& project, Label label);
