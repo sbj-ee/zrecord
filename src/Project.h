@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QMetaType>
+
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -174,3 +176,6 @@ public:
 };
 
 } // namespace zrecord
+
+// Registered so QSignalSpy can carry a move list through QVariant.
+Q_DECLARE_METATYPE(std::vector<zrecord::ClipMove>)

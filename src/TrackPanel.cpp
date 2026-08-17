@@ -58,6 +58,12 @@ void TrackPanel::setTool(Tool tool) {
     update();
 }
 
+void TrackPanel::setFramesPerPixelForTest(double framesPerPixel) {
+    framesPerPixel_ = framesPerPixel;
+    updateScrollBarRange();
+    update();
+}
+
 void TrackPanel::setSnapEnabled(bool enabled) {
     snapEnabled_ = enabled;
 }

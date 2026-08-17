@@ -36,13 +36,18 @@ target_link_libraries(zrecord_core PUBLIC
     PkgConfig::SNDFILE
 )
 
-add_executable(zrecord
-    src/main.cpp
+# The widgets live in a library too, so the GUI tests can drive the real
+# classes rather than a stand-in. Only main() stays in the executable.
+add_library(zrecord_gui STATIC
     src/MainWindow.cpp
     src/TrackPanel.cpp
 )
 
-target_link_libraries(zrecord PRIVATE zrecord_core)
+target_link_libraries(zrecord_gui PUBLIC zrecord_core)
+
+add_executable(zrecord src/main.cpp)
+
+target_link_libraries(zrecord PRIVATE zrecord_gui)
 
 enable_testing()
 add_subdirectory(tests)
