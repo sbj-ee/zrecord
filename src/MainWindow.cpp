@@ -236,6 +236,9 @@ void MainWindow::buildUi() {
     connect(undoStack_, &QUndoStack::canRedoChanged, redoAction_, &QAction::setEnabled);
     connect(undoStack_, &QUndoStack::indexChanged, this, [this](int) {
         trackPanel_->refresh();
+        // Undo/redo can add or remove audio, so every enabled state that
+        // depends on content has to be re-evaluated, not just the selection's.
+        onSelectionChanged();
     });
     undoAction_->setEnabled(false);
     redoAction_->setEnabled(false);
@@ -475,9 +478,17 @@ void MainWindow::buildMenus() {
     fileMenu->addSeparator();
     fileMenu->addAction(quitAction_);
 
+    // Menu-only rather than another toolbar button: the toolbar already
+    // overflows on a narrow window, and this is a keyboard action in practice.
+    selectAllAction_ = new QAction("Select All", this);
+    selectAllAction_->setShortcut(QKeySequence::SelectAll);
+    connect(selectAllAction_, &QAction::triggered, this, &MainWindow::onSelectAll);
+
     QMenu* editMenu = menuBar()->addMenu("&Edit");
     editMenu->addAction(undoAction_);
     editMenu->addAction(redoAction_);
+    editMenu->addSeparator();
+    editMenu->addAction(selectAllAction_);
     editMenu->addSeparator();
     editMenu->addAction(cutAction_);
     editMenu->addAction(copyAction_);
@@ -605,7 +616,7 @@ void MainWindow::setControlsEnabled(bool recording) {
                              addTrackAction_, removeTrackAction_, importAction_,
                              cutAction_, copyAction_, pasteAction_, deleteAction_,
                              silenceAction_, fadeInAction_, fadeOutAction_, crossfadeAction_,
-                             applyEffectAction_, addLabelAction_}) {
+                             applyEffectAction_, addLabelAction_, selectAllAction_}) {
         action->setEnabled(!recording);
     }
     if (!recording) {
@@ -1055,6 +1066,37 @@ void MainWindow::onLabelContextMenu(int labelIndex, const QPoint& globalPos) {
     }
 }
 
+void MainWindow::onSelectAll() {
+    // Whichever track the user is working on: the selected one, else the armed
+    // one, else the first. Selection is per-track, so "all" means all of one
+    // track rather than the whole project.
+    int trackIndex = project_.selection.trackIndex;
+    if (trackIndex < 0) {
+        trackIndex = findArmedTrackIndex();
+    }
+    if (trackIndex < 0 && !project_.tracks.empty()) {
+        trackIndex = 0;
+    }
+    if (trackIndex < 0 || trackIndex >= static_cast<int>(project_.tracks.size())) {
+        return;
+    }
+
+    int64_t end = 0;
+    {
+        std::lock_guard<std::mutex> lock(project_.mutex);
+        end = project_.tracks[static_cast<size_t>(trackIndex)].endFrame();
+    }
+    if (end <= 0) {
+        return; // an empty track has no extent to select
+    }
+
+    project_.selection.trackIndex = trackIndex;
+    project_.selection.startFrame = 0;
+    project_.selection.endFrame = end;
+    trackPanel_->update();
+    onSelectionChanged();
+}
+
 void MainWindow::onSelectionChanged() {
     bool hasSelection = !project_.selection.isEmpty();
     cutAction_->setEnabled(hasSelection);
@@ -1069,6 +1111,9 @@ void MainWindow::onSelectionChanged() {
     // while the button is greyed out.
     applyEffectAction_->setEnabled(hasSelection);
     applyEffectButton_->setEnabled(hasSelection);
+    if (selectAllAction_ != nullptr) {
+        selectAllAction_->setEnabled(projectHasAnyContent());
+    }
     pasteAction_->setEnabled(!project_.clipboard.empty());
 }
 
