@@ -75,6 +75,15 @@ struct Label {
     bool isRange() const { return endFrame > startFrame; }
 };
 
+// One clip's requested destination. A multi-clip drag produces a set of these
+// so the whole move can be validated and applied as a single undoable step.
+struct ClipMove {
+    int fromTrack = -1;
+    int clipIndex = -1;
+    int toTrack = -1;
+    int64_t newStartFrame = 0;
+};
+
 struct Selection {
     int trackIndex = -1;
     int64_t startFrame = 0;

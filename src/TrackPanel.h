@@ -57,7 +57,9 @@ signals:
     // Emitted when a clip drag finishes somewhere valid. The panel does not
     // mutate the project itself -- MainWindow turns this into an undoable
     // command.
-    void clipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame);
+    // A finished drag of one or more clips. As with labels, the panel doesn't
+    // mutate the project itself -- MainWindow turns this into one undoable step.
+    void clipsMoveRequested(const std::vector<ClipMove>& moves);
 
     // Label interactions. As with clip moves, the panel doesn't mutate the
     // project or raise dialogs itself -- MainWindow owns both.
@@ -92,16 +94,22 @@ private:
     // `skipClip`, when set, is left out -- used to hide a clip from its
     // original lane while it is being dragged.
     PeakCache::MinMax computeColumn(const Track& track, int64_t frameStart, int64_t frameEnd,
-                                     const Clip* skipClip = nullptr) const;
+                                     const std::vector<const Clip*>& skipClips = {}) const;
     PeakCache::MinMax computeClipColumn(const Clip& clip, int64_t frameStart, int64_t frameEnd,
                                          int64_t shiftFrames) const;
     // Index of the clip covering `frame` on `trackIndex`, or -1.
     int clipIndexAt(int trackIndex, int64_t frame) const;
+    bool isClipSelected(int trackIndex, int clipIndex) const;
+    // Where every selected clip would land for a given shift. Returns an empty
+    // list if any of them would fall outside the timeline or tracks.
+    std::vector<ClipMove> computeMoves(int64_t deltaFrames, int deltaTracks) const;
+    // True when no moved clip would land on top of a clip that isn't moving.
+    bool movesAreValid(const std::vector<ClipMove>& moves) const;
     // True if [start, start+length) on `trackIndex` is clear of every clip
     // except `excludeClip`, i.e. the drag can legally land there.
     bool canPlaceClip(int trackIndex, int64_t start, int64_t length, const Clip* excludeClip) const;
     void drawLaneWaveform(class QPainter& painter, const Track& track, int laneTop, int w,
-                           const QColor& waveColor, const Clip* skipClip);
+                           const QColor& waveColor, int trackIndex);
     void drawLabelStrip(class QPainter& painter, int w);
     // Index of the label whose marker or text sits under `pos`, or -1.
     int labelIndexAt(const QPoint& pos) const;
@@ -140,10 +148,18 @@ private:
         int targetTrack = -1;
         int64_t previewStartFrame = 0;
         bool valid = true;          // false when the drop would overlap a clip
+        std::vector<ClipMove> preview; // where each selected clip would land
         bool snapped = false;
         int64_t snapFrame = 0;      // target the drag snapped to, for the guide line
     };
     ClipDrag clipDrag_;
+
+    // Clips picked out with the Move tool; a drag shifts all of them together.
+    struct ClipRef {
+        int track = -1;
+        int index = -1;
+    };
+    std::vector<ClipRef> selectedClips_;
 
     bool snapEnabled_ = true;
 

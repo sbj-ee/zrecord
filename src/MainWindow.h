@@ -52,7 +52,7 @@ private slots:
     void onCrossfade();
     void onApplyEffect();
     void onSelectionChanged();
-    void onClipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame);
+    void onClipsMoveRequested(const std::vector<ClipMove>& moves);
     void onAddLabel();
     void onLabelActivated(int labelIndex);
     void onLabelContextMenu(int labelIndex, const QPoint& globalPos);

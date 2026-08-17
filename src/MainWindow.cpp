@@ -285,7 +285,7 @@ void MainWindow::buildUi() {
     trackPanel_->setMinimumHeight(260);
     rootLayout->addWidget(trackPanel_, 1);
     connect(trackPanel_, &TrackPanel::selectionChanged, this, &MainWindow::onSelectionChanged);
-    connect(trackPanel_, &TrackPanel::clipMoveRequested, this, &MainWindow::onClipMoveRequested);
+    connect(trackPanel_, &TrackPanel::clipsMoveRequested, this, &MainWindow::onClipsMoveRequested);
     connect(trackPanel_, &TrackPanel::labelActivated, this, &MainWindow::onLabelActivated);
     connect(trackPanel_, &TrackPanel::labelContextMenuRequested, this, &MainWindow::onLabelContextMenu);
     connect(selectToolAction_, &QAction::triggered, this, [this] {
@@ -986,9 +986,11 @@ void MainWindow::onApplyEffect() {
     trackPanel_->refresh();
 }
 
-void MainWindow::onClipMoveRequested(int fromTrack, int clipIndex, int toTrack, qint64 newStartFrame) {
-    undoStack_->push(new MoveClipCommand(project_, fromTrack, clipIndex, toTrack,
-                                          static_cast<int64_t>(newStartFrame)));
+void MainWindow::onClipsMoveRequested(const std::vector<ClipMove>& moves) {
+    if (moves.empty()) {
+        return;
+    }
+    undoStack_->push(new MoveClipsCommand(project_, moves));
     trackPanel_->refresh();
     onSelectionChanged(); // the move clears the selection
 }
