@@ -9,6 +9,7 @@
 
 #include "AudioEngineInterface.h"
 #include "Filters.h"
+#include "RingBuffer.h"
 #include "Project.h"
 
 namespace zrecord {
@@ -64,6 +65,10 @@ public:
     // startRecording), for incremental consumers like a live waveform view.
     std::vector<float> consumeNewSamples() override;
 
+    // True if the capture ring ever overflowed during this take, meaning audio
+    // was dropped. Latched until the next startRecording().
+    bool capturedOverrun() const;
+
 private:
     static int inputCallbackStatic(const void* input, void* output, unsigned long frameCount,
                                     const PaStreamCallbackTimeInfo* timeInfo,
@@ -78,9 +83,23 @@ private:
     PaStream* inputStream_ = nullptr;
     PaStream* outputStream_ = nullptr;
 
-    mutable std::mutex captureMutex_;
-    FilterChain filterChain_;
-    std::vector<float> captureBuffer_;
+    // Moves whatever the audio thread has produced into captureBuffer_.
+    // Consumer side only: every public accessor below calls it first, and they
+    // are all UI-thread.
+    void drainCapture();
+
+    // Guards only the filter settings handoff, never the capture path. The
+    // audio thread takes it with try_lock, so it can never be blocked by the
+    // UI holding it.
+    mutable std::mutex settingsMutex_;
+    FilterSettings pendingSettings_;
+    std::atomic<bool> settingsDirty_{false};
+
+    FilterChain filterChain_;   // audio thread only, once recording starts
+    std::vector<float> scratch_; // preallocated so the callback never allocates
+    RingBuffer captureRing_;
+
+    std::vector<float> captureBuffer_; // UI thread only
     size_t consumedOffset_ = 0;
 
     Project* playbackProject_ = nullptr;

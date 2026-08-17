@@ -46,12 +46,24 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
     sampleRate_ = sampleRate;
     inputMuted_.store(false, std::memory_order_relaxed);
 
+    // All of this happens before the stream starts, so the audio thread is not
+    // running yet and none of it needs guarding.
+    filterChain_.prepare(sampleRate_, channels_);
     {
-        std::lock_guard<std::mutex> lock(captureMutex_);
-        filterChain_.prepare(sampleRate_, channels_);
-        captureBuffer_.clear();
-        consumedOffset_ = 0;
+        std::lock_guard<std::mutex> lock(settingsMutex_);
+        filterChain_.setSettings(pendingSettings_);
+        settingsDirty_.store(false, std::memory_order_relaxed);
     }
+    captureBuffer_.clear();
+    consumedOffset_ = 0;
+
+    // Ten seconds of headroom: the UI drains every 50 ms, so this only runs
+    // out if the UI thread is wedged, and then the overrun flag reports it.
+    const size_t ringFrames = static_cast<size_t>(sampleRate_ * 10.0);
+    captureRing_.reset(ringFrames * static_cast<size_t>(channels_));
+    // paFramesPerBufferUnspecified means the host picks; size the scratch
+    // generously and grow it in the callback only if the host ever exceeds it.
+    scratch_.assign(static_cast<size_t>(sampleRate_ * 0.5) * static_cast<size_t>(channels_), 0.0f);
 
     PaStreamParameters inputParams{};
     inputParams.device = deviceIndex;
@@ -170,13 +182,28 @@ bool AudioEngine::isPlaying() const {
 }
 
 void AudioEngine::setFilterSettings(const FilterSettings& settings) {
-    std::lock_guard<std::mutex> lock(captureMutex_);
-    filterChain_.setSettings(settings);
+    std::lock_guard<std::mutex> lock(settingsMutex_);
+    pendingSettings_ = settings;
+    settingsDirty_.store(true, std::memory_order_release);
+    if (!recording_.load()) {
+        // Nothing is running, so apply it directly rather than waiting for a
+        // callback that will not come.
+        filterChain_.setSettings(settings);
+        settingsDirty_.store(false, std::memory_order_relaxed);
+    }
 }
 
 FilterSettings AudioEngine::filterSettings() const {
-    std::lock_guard<std::mutex> lock(captureMutex_);
-    return filterChain_.settings();
+    std::lock_guard<std::mutex> lock(settingsMutex_);
+    return pendingSettings_;
+}
+
+void AudioEngine::drainCapture() {
+    captureRing_.readAll(captureBuffer_);
+}
+
+bool AudioEngine::capturedOverrun() const {
+    return captureRing_.overran();
 }
 
 float AudioEngine::peakLevel() const {
@@ -184,7 +211,7 @@ float AudioEngine::peakLevel() const {
 }
 
 double AudioEngine::capturedSeconds() const {
-    std::lock_guard<std::mutex> lock(captureMutex_);
+    const_cast<AudioEngine*>(this)->drainCapture();
     if (channels_ <= 0 || sampleRate_ <= 0.0) {
         return 0.0;
     }
@@ -192,17 +219,17 @@ double AudioEngine::capturedSeconds() const {
 }
 
 size_t AudioEngine::capturedFrameCount() const {
-    std::lock_guard<std::mutex> lock(captureMutex_);
+    const_cast<AudioEngine*>(this)->drainCapture();
     return channels_ > 0 ? captureBuffer_.size() / static_cast<size_t>(channels_) : 0;
 }
 
 std::vector<float> AudioEngine::copyCapturedBuffer() const {
-    std::lock_guard<std::mutex> lock(captureMutex_);
+    const_cast<AudioEngine*>(this)->drainCapture();
     return captureBuffer_;
 }
 
 std::vector<float> AudioEngine::consumeNewSamples() {
-    std::lock_guard<std::mutex> lock(captureMutex_);
+    drainCapture();
     std::vector<float> result(captureBuffer_.begin() + static_cast<long>(consumedOffset_), captureBuffer_.end());
     consumedOffset_ = captureBuffer_.size();
     return result;
@@ -223,23 +250,42 @@ int AudioEngine::outputCallbackStatic(const void* /*input*/, void* output, unsig
 }
 
 int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
-    std::vector<float> block(static_cast<size_t>(frameCount) * static_cast<size_t>(channels_), 0.0f);
-    // A muted take still advances (so timing stays intact) but records
-    // silence, and the level meter correctly reads zero.
+    // Real-time thread. No allocation, no blocking lock, no unbounded growth:
+    // the scratch block is preallocated, settings are picked up with try_lock,
+    // and the samples leave via a lock-free ring the UI drains.
+    const size_t needed = static_cast<size_t>(frameCount) * static_cast<size_t>(channels_);
+    if (scratch_.size() < needed) {
+        // The host asked for a bigger block than we sized for. Growing here
+        // allocates, which is exactly what we are avoiding -- but dropping the
+        // audio would be worse, and the next take will be sized correctly.
+        scratch_.resize(needed);
+    }
+
     if (input != nullptr && !inputMuted_.load(std::memory_order_relaxed)) {
-        std::copy(input, input + block.size(), block.begin());
+        std::copy(input, input + needed, scratch_.begin());
+    } else {
+        // A muted take still advances (so timing stays intact) but records
+        // silence, and the level meter correctly reads zero.
+        std::fill_n(scratch_.begin(), needed, 0.0f);
     }
 
     float peak = 0.0f;
-    for (float sample : block) {
-        peak = std::max(peak, std::fabs(sample));
+    for (size_t i = 0; i < needed; ++i) {
+        peak = std::max(peak, std::fabs(scratch_[i]));
     }
 
-    {
-        std::lock_guard<std::mutex> lock(captureMutex_);
-        filterChain_.process(block, frameCount);
-        captureBuffer_.insert(captureBuffer_.end(), block.begin(), block.end());
+    if (settingsDirty_.load(std::memory_order_acquire)) {
+        // try_lock, never lock: if the UI happens to hold it this instant we
+        // simply use the current settings for one more block.
+        std::unique_lock<std::mutex> lock(settingsMutex_, std::try_to_lock);
+        if (lock.owns_lock()) {
+            filterChain_.setSettings(pendingSettings_);
+            settingsDirty_.store(false, std::memory_order_relaxed);
+        }
     }
+
+    filterChain_.process(scratch_, frameCount);
+    captureRing_.write(scratch_.data(), needed);
 
     peakLevel_.store(peak, std::memory_order_relaxed);
     return paContinue;
