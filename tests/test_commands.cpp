@@ -42,6 +42,7 @@ private slots:
     void undoRedo_isRepeatable();
 
     void appendClip_leavesPlayheadAtStartOfTheNewClip();
+    void undo_restoresThePlayhead();
 
     void moveClips_movesWholeSetAndUndoRestoresAll();
     void moveClips_acrossTracksKeepsTargetSorted();
@@ -234,6 +235,27 @@ void TestCommands::moveClips_acrossTracksKeepsTargetSorted() {
     QCOMPARE(project_.tracks[1].clips.size(), size_t(1));
     QCOMPARE(project_.tracks[0].clips[0].startFrame, int64_t(0));
     QCOMPARE(project_.tracks[1].clips[0].startFrame, int64_t(50));
+}
+
+void TestCommands::undo_restoresThePlayhead() {
+    project_.playheadFrame = 5;
+
+    // Delete pulls the playhead to the start of the cut.
+    stack_.push(new DeleteSelectionCommand(project_, 0, 2, 4));
+    QCOMPARE(project_.playheadFrame, int64_t(2));
+
+    stack_.undo();
+    QCOMPARE(project_.playheadFrame, int64_t(5));
+
+    stack_.redo();
+    QCOMPARE(project_.playheadFrame, int64_t(2));
+
+    // Same for an edit that pushes it forward.
+    stack_.undo();
+    stack_.push(new PasteCommand(project_, 0, 1, std::vector<float>{9.0f, 9.0f}, 1));
+    QCOMPARE(project_.playheadFrame, int64_t(3));
+    stack_.undo();
+    QCOMPARE(project_.playheadFrame, int64_t(5));
 }
 
 namespace {

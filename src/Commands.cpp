@@ -12,12 +12,15 @@ void TrackEditCommand::redo() {
     if (!afterSnapshot_.has_value()) {
         beforeSnapshot_ = track();
         selectionBefore_ = project_.selection;
+        playheadBefore_ = project_.playheadFrame;
         apply();
         afterSnapshot_ = track();
         selectionAfter_ = project_.selection;
+        playheadAfter_ = project_.playheadFrame;
     } else {
         track() = *afterSnapshot_;
         project_.selection = selectionAfter_;
+        project_.playheadFrame = playheadAfter_;
     }
 }
 
@@ -25,6 +28,10 @@ void TrackEditCommand::undo() {
     std::lock_guard<std::mutex> lock(project_.mutex);
     track() = beforeSnapshot_;
     project_.selection = selectionBefore_;
+    // Several edits move the playhead (delete pulls it to the cut, paste and
+    // record push it past the new audio). Undo has to put it back, or the
+    // cursor ends up pointing somewhere the audio no longer justifies.
+    project_.playheadFrame = playheadBefore_;
 }
 
 DeleteSelectionCommand::DeleteSelectionCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame)
