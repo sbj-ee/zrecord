@@ -30,6 +30,11 @@ public:
 
     // When on, a dragged clip's nearest edge jumps to nearby clip edges, the
     // playhead, or zero. Holding Alt during a drag bypasses it.
+    // Fixes the zoom level directly. Only tests use this: everything else
+    // goes through zoomIn/zoomOut/zoomToFit, but a test wants exact
+    // pixel-to-frame arithmetic rather than whatever zoom it happens to be at.
+    void setFramesPerPixelForTest(double framesPerPixel);
+
     void setSnapEnabled(bool enabled);
     bool snapEnabled() const { return snapEnabled_; }
 
@@ -47,6 +52,14 @@ public:
     // While `trackIndex` is being recorded into, its lane shows a simple
     // scrolling live strip (like a VU-style capture view) instead of the
     // zoomed timeline, since the audio isn't committed to the project yet.
+    // Layout constants are public so tests can aim at a lane without
+    // duplicating the arithmetic that positions them.
+    static constexpr int kHeaderWidth = 150;
+    static constexpr int kRulerHeight = 24;
+    static constexpr int kLabelStripHeight = 20;
+    static constexpr int kLaneHeight = 90;
+    static constexpr int lanesTop() { return kRulerHeight + kLabelStripHeight; }
+
     void beginLiveCapture(int trackIndex);
     void pushLiveColumn(float minValue, float maxValue);
     void endLiveCapture();
@@ -175,13 +188,6 @@ private:
     };
     LiveCapture liveCapture_;
 
-    static constexpr int kHeaderWidth = 150;
-    static constexpr int kRulerHeight = 24;
-    static constexpr int kLabelStripHeight = 20;
-    // Track lanes start below the ruler and the label strip; everything that
-    // positions a lane goes through this rather than adding the two up itself.
-    static constexpr int lanesTop() { return kRulerHeight + kLabelStripHeight; }
-    static constexpr int kLaneHeight = 90;
     static constexpr int kScrollBarHeight = 16;
     static constexpr int kMaxLiveColumns = 2000;
     // Snap radius in pixels, so the feel stays the same at every zoom level.
