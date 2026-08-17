@@ -197,4 +197,10 @@ enum class FadeShape { In, Out };
 // exactly the span it wants faded.
 void applyLinearFade(std::vector<float>& interleaved, int channels, FadeShape shape);
 
+// Crossfades `incoming` over `outgoing` in place; both must hold the same
+// number of frames. Uses equal-power (cos/sin) ramps rather than linear ones:
+// two uncorrelated signals summed with linear ramps lose about 3 dB in the
+// middle of the transition, which is audible as a dip.
+void mixEqualPowerCrossfade(std::vector<float>& outgoing, const std::vector<float>& incoming, int channels);
+
 } // namespace zrecord

@@ -135,6 +135,17 @@ public:
     // Appends `samples` as a new clip at the track's current end.
     static void appendClip(Track& track, const std::vector<float>& samples, int channels);
 
+    // Merges clips `firstClipIndex` and the one after it into a single clip,
+    // overlapping them by `frames` and mixing that overlap with equal-power
+    // ramps. Later clips ripple left by `frames`, so the track shortens by the
+    // crossfade length -- which is what a real crossfade does.
+    //
+    // Merging rather than letting the two clips overlap on the timeline keeps
+    // the "clips are sorted and non-overlapping" invariant that every range
+    // operation here relies on. Returns false, leaving the track untouched, if
+    // the clips aren't adjacent or either is shorter than `frames`.
+    static bool crossfadeClips(Track& track, int firstClipIndex, int64_t frames, int channels);
+
     // Inserts `label` keeping `labels` sorted by startFrame; returns its index.
     int insertLabel(const Label& label);
 
