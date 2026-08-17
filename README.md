@@ -57,6 +57,10 @@ sudo apt install ./build/zrecord_0.2.0_amd64.deb
 
 This installs the `zrecord` binary to `/usr/bin` and a desktop entry to `/usr/share/applications`, so it also appears in your application launcher.
 
+## Design notes
+
+- [Plugin support scoping](docs/plugin-support-scope.md) — proposal for hosting third-party effects.
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for what changed between releases.
