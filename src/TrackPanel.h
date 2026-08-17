@@ -79,6 +79,7 @@ protected:
 private:
     struct TrackHeader {
         QWidget* container = nullptr;
+        QToolButton* displayButton = nullptr;
         QLabel* nameLabel = nullptr;
         QToolButton* muteButton = nullptr;
         QToolButton* soloButton = nullptr;
@@ -111,6 +112,11 @@ private:
     void drawLaneWaveform(class QPainter& painter, const Track& track, int laneTop, int w,
                            const QColor& waveColor, int trackIndex);
     void drawLabelStrip(class QPainter& painter, int w);
+    // Spectrogram for one lane: one FFT per pixel column, magnitude mapped to
+    // colour. Computed on demand rather than cached -- see the note in the
+    // implementation about when that stops being good enough.
+    void drawLaneSpectrogram(class QPainter& painter, const Track& track, int laneTop, int w,
+                              int trackIndex);
     // Index of the label whose marker or text sits under `pos`, or -1.
     int labelIndexAt(const QPoint& pos) const;
     void drawClipDragPreview(class QPainter& painter, int w);
@@ -180,6 +186,11 @@ private:
     static constexpr int kMaxLiveColumns = 2000;
     // Snap radius in pixels, so the feel stays the same at every zoom level.
     static constexpr int kSnapPixels = 8;
+    // 512 samples is a deliberate compromise: enough frequency resolution to
+    // read as a spectrogram, small enough that a full-width repaint stays
+    // interactive when every column needs its own transform.
+    static constexpr int kFftSize = 512;
+    static constexpr float kSpectrogramFloorDb = -84.0f;
 };
 
 } // namespace zrecord

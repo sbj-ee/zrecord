@@ -1,5 +1,6 @@
 #include "TrackPanel.h"
 
+#include "Fft.h"
 #include "Snap.h"
 
 #include <QHBoxLayout>
@@ -218,6 +219,13 @@ void TrackPanel::rebuildHeaders() {
         buttonRow->addWidget(header.armButton);
         layout->addLayout(buttonRow);
 
+        header.displayButton = new QToolButton(header.container);
+        header.displayButton->setText("~");
+        header.displayButton->setCheckable(true);
+        header.displayButton->setChecked(project_->tracks[i].display == TrackDisplay::Spectrogram);
+        header.displayButton->setToolTip("Show this track as a spectrogram");
+        buttonRow->addWidget(header.displayButton);
+
         header.gainSlider = new QSlider(Qt::Horizontal, header.container);
         header.gainSlider->setRange(-24, 24);
         header.gainSlider->setValue(static_cast<int>(project_->tracks[i].gainDb));
@@ -246,6 +254,12 @@ void TrackPanel::rebuildHeaders() {
                 }
             }
             project_->tracks[static_cast<size_t>(index)].recordArmed = checked;
+        });
+        connect(header.displayButton, &QToolButton::toggled, this, [this, index](bool checked) {
+            if (project_ == nullptr) return;
+            project_->tracks[static_cast<size_t>(index)].display =
+                checked ? TrackDisplay::Spectrogram : TrackDisplay::Waveform;
+            update();
         });
         connect(header.gainSlider, &QSlider::valueChanged, this, [this, index](int value) {
             if (project_ == nullptr) return;
@@ -477,6 +491,81 @@ const Clip* TrackPanel::draggedClip() const {
     return &track.clips[static_cast<size_t>(clipDrag_.clipIndex)];
 }
 
+void TrackPanel::drawLaneSpectrogram(QPainter& painter, const Track& track, int laneTop, int w,
+                                      int trackIndex) {
+    const int usableHeight = kLaneHeight - 2;
+    if (usableHeight <= 0 || project_ == nullptr) {
+        return;
+    }
+
+    std::vector<const Clip*> lifted;
+    if (clipDrag_.active) {
+        for (const ClipMove& move : clipDrag_.preview) {
+            if (move.fromTrack == trackIndex) {
+                lifted.push_back(&track.clips[static_cast<size_t>(move.clipIndex)]);
+            }
+        }
+    }
+
+    std::vector<float> mono(kFftSize);
+    for (int x = kHeaderWidth; x < w; ++x) {
+        // Each column reads one FFT window starting at that column's frame, so
+        // the window is fixed in samples while the step between columns tracks
+        // the zoom level.
+        int64_t frameStart = frameAtX(x);
+
+        bool anyAudio = false;
+        std::fill(mono.begin(), mono.end(), 0.0f);
+        for (const auto& clip : track.clips) {
+            if (std::find(lifted.begin(), lifted.end(), &clip) != lifted.end()) {
+                continue;
+            }
+            int64_t overlapStart = std::max(clip.startFrame, frameStart);
+            int64_t overlapEnd = std::min(clip.endFrame(), frameStart + kFftSize);
+            if (overlapStart >= overlapEnd) {
+                continue;
+            }
+            anyAudio = true;
+            for (int64_t f = overlapStart; f < overlapEnd; ++f) {
+                int64_t local = f - clip.startFrame;
+                float sum = 0.0f;
+                for (int c = 0; c < clip.channels; ++c) {
+                    size_t idx = static_cast<size_t>(local) * static_cast<size_t>(clip.channels) +
+                                 static_cast<size_t>(c);
+                    if (idx < clip.samples.size()) {
+                        sum += clip.samples[idx];
+                    }
+                }
+                mono[static_cast<size_t>(f - frameStart)] = clip.channels > 0 ? sum / clip.channels : 0.0f;
+            }
+        }
+        if (!anyAudio) {
+            continue;
+        }
+
+        std::vector<float> bins = magnitudeSpectrumDb(mono, kSpectrogramFloorDb);
+        if (bins.empty()) {
+            continue;
+        }
+
+        // Low frequencies at the bottom, as every other spectrogram draws them.
+        for (int y = 0; y < usableHeight; ++y) {
+            size_t bin = static_cast<size_t>(static_cast<double>(usableHeight - 1 - y) /
+                                              usableHeight * (bins.size() - 1));
+            float db = bins[bin];
+            float t = (db - kSpectrogramFloorDb) / (0.0f - kSpectrogramFloorDb);
+            t = std::clamp(t, 0.0f, 1.0f);
+            // Dark blue -> green -> yellow: monotonically brightening, so
+            // level reads correctly even in greyscale.
+            int r = static_cast<int>(std::clamp(255.0f * (t < 0.5f ? 0.0f : (t - 0.5f) * 2.0f), 0.0f, 255.0f));
+            int g = static_cast<int>(std::clamp(255.0f * std::min(1.0f, t * 1.6f), 0.0f, 255.0f));
+            int b = static_cast<int>(std::clamp(255.0f * (t < 0.5f ? (0.3f + t) : (1.0f - t) * 0.6f), 0.0f, 255.0f));
+            painter.setPen(QColor(r, g, b));
+            painter.drawPoint(x, laneTop + 1 + y);
+        }
+    }
+}
+
 void TrackPanel::drawLaneWaveform(QPainter& painter, const Track& track, int laneTop, int w,
                                    const QColor& waveColor, int trackIndex) {
     int midY = laneTop + kLaneHeight / 2;
@@ -668,7 +757,11 @@ void TrackPanel::paintEvent(QPaintEvent*) {
         } else {
             // A clip mid-drag is lifted out of its own lane and redrawn at the
             // preview position below, so it appears to follow the cursor.
-            drawLaneWaveform(painter, track, laneTop, w, waveColor, static_cast<int>(i));
+            if (track.display == TrackDisplay::Spectrogram) {
+                drawLaneSpectrogram(painter, track, laneTop, w, static_cast<int>(i));
+            } else {
+                drawLaneWaveform(painter, track, laneTop, w, waveColor, static_cast<int>(i));
+            }
 
             // Outline clips picked out with the Move tool, so it's visible
             // which ones a drag will carry.
