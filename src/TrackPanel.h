@@ -60,6 +60,11 @@ public:
     void zoomOut();
     void zoomToFit();
 
+    // Scrolls, a page at a time, so `frame` stays in view: the view follows
+    // the playhead during playback.
+    void followPlayhead(int64_t frame);
+    int64_t viewStartFrameForTest() const { return viewStartFrame_; }
+
     // While `trackIndex` is being recorded into, its lane shows a simple
     // scrolling live strip (like a VU-style capture view) instead of the
     // zoomed timeline, since the audio isn't committed to the project yet.
@@ -77,6 +82,10 @@ public:
 
 signals:
     void selectionChanged();
+
+    // A click on the ruler (or in a lane with the Select tool) moved the
+    // playhead to `frame`. MainWindow makes running playback jump there.
+    void seekRequested(int64_t frame);
 
     // Emitted when a clip drag finishes somewhere valid. The panel does not
     // mutate the project itself -- MainWindow turns this into an undoable
@@ -180,6 +189,7 @@ private:
     Tool tool_ = Tool::Select;
 
     bool dragging_ = false;
+    bool rulerSeeking_ = false; // dragging along the ruler scrubs the playhead
     int dragTrackIndex_ = -1;
     int64_t dragAnchorFrame_ = 0;
 

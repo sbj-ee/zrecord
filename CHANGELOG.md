@@ -7,6 +7,14 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Click-to-seek and a following view.** Click or drag along the ruler to
+  move the playhead, whether stopped or playing. During playback it jumps
+  there without restarting. A click in a lane with the Select tool also
+  seeks. The view pages along to keep the playhead in sight during
+  playback.
+
 ### Fixed
 
 - **Saved projects no longer corrupt loud audio.** Clips were stored as 24-bit

@@ -926,11 +926,45 @@ void TrackPanel::paintEvent(QPaintEvent*) {
     if (playheadX >= kHeaderWidth && playheadX <= w) {
         painter.setPen(QColor(255, 80, 80));
         painter.drawLine(playheadX, kRulerHeight, playheadX, laneAreaBottom);
+        // A handle in the ruler, where clicking seeks.
+        const QPoint handle[3] = {QPoint(playheadX - 6, kRulerHeight - 10), QPoint(playheadX + 6, kRulerHeight - 10),
+                                  QPoint(playheadX, kRulerHeight)};
+        painter.setBrush(QColor(255, 80, 80));
+        painter.drawPolygon(handle, 3);
+        painter.setBrush(Qt::NoBrush);
     }
+}
+
+void TrackPanel::followPlayhead(int64_t frame) {
+    if (project_ == nullptr) {
+        return;
+    }
+    const int visibleWidth = width() - kHeaderWidth;
+    if (visibleWidth <= 0) {
+        return;
+    }
+    const int x = xAtFrame(frame);
+    if (x < kHeaderWidth || x > width() - 8) {
+        // Page so the playhead lands a little in from the left edge, the way
+        // Audacity pages rather than scrolling continuously.
+        viewStartFrame_ = std::max<int64_t>(
+            0, frame - static_cast<int64_t>(visibleWidth * 0.05 * framesPerPixel_));
+        updateScrollBarRange();
+        viewStartFrame_ = hScroll_->value(); // clamped to the timeline
+    }
+    update();
 }
 
 void TrackPanel::mousePressEvent(QMouseEvent* event) {
     if (project_ == nullptr || event->pos().x() < kHeaderWidth) return;
+    if (event->pos().y() < kRulerHeight && event->button() == Qt::LeftButton) {
+        // Click-to-seek, stopped or playing.
+        rulerSeeking_ = true;
+        project_->playheadFrame = std::max<int64_t>(0, frameAtX(event->pos().x()));
+        emit seekRequested(project_->playheadFrame);
+        update();
+        return;
+    }
     int lane = laneIndexAtY(event->pos().y());
     if (lane < 0) return;
 
@@ -1016,10 +1050,20 @@ void TrackPanel::mousePressEvent(QMouseEvent* event) {
     project_->selection.startFrame = dragAnchorFrame_;
     project_->selection.endFrame = dragAnchorFrame_;
     project_->playheadFrame = dragAnchorFrame_;
+    emit seekRequested(dragAnchorFrame_);
     update();
 }
 
 void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
+    if (rulerSeeking_ && project_ != nullptr) {
+        int64_t frame = std::max<int64_t>(0, frameAtX(std::max(kHeaderWidth, event->pos().x())));
+        if (frame != project_->playheadFrame) {
+            project_->playheadFrame = frame;
+            emit seekRequested(frame);
+            update();
+        }
+        return;
+    }
     if (envelopeDrag_.active && project_ != nullptr) {
         Track& track = project_->tracks[static_cast<size_t>(envelopeDrag_.trackIndex)];
         if (envelopeDrag_.pointIndex >= 0 &&
@@ -1083,6 +1127,10 @@ void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void TrackPanel::mouseReleaseEvent(QMouseEvent*) {
+    if (rulerSeeking_) {
+        rulerSeeking_ = false;
+        return;
+    }
     if (envelopeDrag_.active) {
         EnvelopeDrag drag = std::move(envelopeDrag_);
         envelopeDrag_ = EnvelopeDrag{};

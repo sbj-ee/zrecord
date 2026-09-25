@@ -36,6 +36,7 @@ private slots:
     void onExport();
     void onFiltersChanged();
     void onTick();
+    void onSeekRequested(int64_t frame);
     void refreshDevices();
     void onMicVolumeChanged(int value);
 

@@ -158,6 +158,7 @@ bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
 
     // Set only once nothing can bail out without clearing it again.
     playbackProject_ = &project;
+    seekRequest_.store(-1);
     playbackPos_ = static_cast<size_t>(std::max<int64_t>(0, project.playheadFrame));
     playbackFrame_.store(static_cast<int64_t>(playbackPos_));
     playbackChannels_ = project.channels;
@@ -198,11 +199,25 @@ void AudioEngine::stopPlayback() {
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
     }
+    int64_t pendingSeek = seekRequest_.exchange(-1);
+    if (pendingSeek >= 0) {
+        playbackPos_ = static_cast<size_t>(pendingSeek); // the callback never got to it
+    }
     if (playbackProject_ != nullptr && !playbackFinished_.load()) {
         playbackProject_->playheadFrame = static_cast<int64_t>(playbackPos_);
     }
     playbackProject_ = nullptr;
     mixer_.clear(); // the stream is closed, so the callback can't be running
+}
+
+void AudioEngine::seekPlayback(int64_t frame) {
+    if (outputStream_ == nullptr) {
+        return;
+    }
+    frame = std::max<int64_t>(0, frame);
+    // The callback owns playbackPos_; it picks this up at its next block.
+    seekRequest_.store(frame, std::memory_order_release);
+    playbackFrame_.store(frame, std::memory_order_relaxed);
 }
 
 void AudioEngine::refreshPlayback() {
@@ -332,6 +347,10 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
 int AudioEngine::handleOutput(float* output, unsigned long frameCount) {
     // Real-time path: no lock, no allocation. The mixer renders straight into
     // PortAudio's buffer from the current snapshot.
+    int64_t seek = seekRequest_.exchange(-1, std::memory_order_acquire);
+    if (seek >= 0) {
+        playbackPos_ = static_cast<size_t>(seek);
+    }
     bool more = mixer_.render(static_cast<int64_t>(playbackPos_), output, frameCount, playbackChannels_);
     playbackPos_ += frameCount;
     playbackFrame_.store(static_cast<int64_t>(playbackPos_), std::memory_order_relaxed);

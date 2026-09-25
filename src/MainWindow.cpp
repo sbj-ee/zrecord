@@ -317,6 +317,7 @@ void MainWindow::buildUi() {
     trackPanel_->setMinimumHeight(260);
     rootLayout->addWidget(trackPanel_, 1);
     connect(trackPanel_, &TrackPanel::selectionChanged, this, &MainWindow::onSelectionChanged);
+    connect(trackPanel_, &TrackPanel::seekRequested, this, &MainWindow::onSeekRequested);
     connect(trackPanel_, &TrackPanel::clipsMoveRequested, this, &MainWindow::onClipsMoveRequested);
     connect(trackPanel_, &TrackPanel::envelopeEdited, this, &MainWindow::onEnvelopeEdited);
     connect(trackPanel_, &TrackPanel::labelActivated, this, &MainWindow::onLabelActivated);
@@ -817,6 +818,15 @@ void MainWindow::onTogglePlayback() {
     } else {
         stopPlaybackNow();
     }
+}
+
+void MainWindow::onSeekRequested(int64_t frame) {
+    project_.playheadFrame = frame;
+    if (playbackActive_ && engine_->isPlaying()) {
+        engine_->seekPlayback(frame);
+        playbackStartFrame_ = frame; // running out now returns here
+    }
+    trackPanel_->update();
 }
 
 void MainWindow::stopPlaybackNow() {
@@ -1372,9 +1382,9 @@ void MainWindow::onTick() {
     } else if (playbackActive_) {
         // Let playback hear edits made since the last tick.
         engine_->refreshPlayback();
-        // The playhead follows what's being heard.
+        // The playhead follows what's being heard, and the view follows it.
         project_.playheadFrame = engine_->playbackFrame();
-        trackPanel_->update();
+        trackPanel_->followPlayhead(project_.playheadFrame);
     }
 }
 

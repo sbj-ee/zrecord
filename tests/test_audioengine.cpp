@@ -50,6 +50,7 @@ private slots:
     void naturalEndDoesNotLeakTheStream();
     void naturalEndReleasesTheProject();
     void playbackRunsWhileTheUiHoldsTheProjectMutex();
+    void seekJumpsRunningPlayback();
 
 private:
     QTemporaryDir home_;
@@ -122,6 +123,24 @@ void TestAudioEngine::playbackRunsWhileTheUiHoldsTheProjectMutex() {
         QVERIFY2(waitUntilIdle(*engine_, 3000), "playback stalled while the project mutex was held");
     }
     QVERIFY(engine_->playbackFrame() >= 4410);
+    engine_->stopPlayback();
+}
+
+void TestAudioEngine::seekJumpsRunningPlayback() {
+    // Click-to-seek during playback moves the running stream without
+    // restarting it. (ALSA's null device doesn't run in real time, so this
+    // pins that a seek is taken up and playback still ends cleanly past it,
+    // not how quickly.)
+    Project project;
+    fill(project, 441000);
+    std::string error;
+    if (!engine_->startPlayback(project, error)) {
+        QSKIP(qPrintable(QString("no usable output device: %1").arg(QString::fromStdString(error))));
+    }
+    engine_->seekPlayback(436590);
+    QVERIFY(engine_->playbackFrame() >= 436590);
+    QVERIFY2(waitUntilIdle(*engine_, 3000), "playback didn't jump to the seek point");
+    QVERIFY(engine_->playbackFrame() >= 441000);
     engine_->stopPlayback();
 }
 

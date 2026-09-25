@@ -61,6 +61,8 @@ private slots:
     void playheadFollowsPlayback();
     void recordingStopsPlayback();
     void clipSelectionIsDroppedWhenTracksChange();
+    void rulerClickSeeksWhileStopped();
+    void seekingAndAutoScrollDuringPlayback();
 
 private:
     Project project_;
@@ -696,6 +698,64 @@ void TestGui::clipSelectionIsDroppedWhenTracksChange() {
     project_.tracks[0].clips[1].startFrame = 50000;
     panel_.refresh(); // what MainWindow does after every edit, undo and redo
     QCOMPARE(panel_.selectedClipCountForTest(), size_t(0));
+}
+
+void TestGui::rulerClickSeeksWhileStopped() {
+    QSignalSpy spy(&panel_, &TrackPanel::seekRequested);
+    QTest::mouseClick(&panel_, Qt::LeftButton, Qt::NoModifier,
+                       QPoint(TrackPanel::kHeaderWidth + 250, TrackPanel::kRulerHeight / 2));
+    QCOMPARE(project_.playheadFrame, int64_t(25000));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).value<int64_t>(), int64_t(25000));
+    QVERIFY(project_.selection.isEmpty()); // a seek isn't a selection
+
+    // Dragging along the ruler scrubs.
+    QTest::mousePress(&panel_, Qt::LeftButton, Qt::NoModifier,
+                       QPoint(TrackPanel::kHeaderWidth + 100, TrackPanel::kRulerHeight / 2));
+    QTest::mouseMove(&panel_, QPoint(TrackPanel::kHeaderWidth + 150, TrackPanel::kRulerHeight / 2));
+    QTest::mouseRelease(&panel_, Qt::LeftButton, Qt::NoModifier,
+                         QPoint(TrackPanel::kHeaderWidth + 150, TrackPanel::kRulerHeight / 2));
+    QCOMPARE(project_.playheadFrame, int64_t(15000));
+}
+
+void TestGui::seekingAndAutoScrollDuringPlayback() {
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    window.resize(1000, 600);
+    TrackPanel* panel = window.findChild<TrackPanel*>();
+    Project* project = panel->projectForTest();
+    project->channels = 1;
+    Track track;
+    track.clips.push_back(makeClip(0, 10'000'000)); // long enough to scroll
+    project->tracks.push_back(std::move(track));
+    panel->refresh();
+    panel->setFramesPerPixelForTest(100.0);
+
+    QPushButton* play = findButton(window, "▶  Play");
+    play->click();
+    QVERIFY(fake->isPlaying());
+
+    // Click-to-seek while playing jumps the running playback.
+    QTest::mouseClick(panel, Qt::LeftButton, Qt::NoModifier,
+                       QPoint(TrackPanel::kHeaderWidth + 300, TrackPanel::kRulerHeight / 2));
+    QCOMPARE(fake->lastSeek(), int64_t(30000));
+    QCOMPARE(project->playheadFrame, int64_t(30000));
+    QVERIFY(fake->isPlaying());
+
+    // Playback passing the right edge pages the view along.
+    QCOMPARE(panel->viewStartFrameForTest(), int64_t(0));
+    const int64_t farFrame = 2'000'000;
+    fake->setPlaybackFrame(farFrame);
+    QTRY_VERIFY(panel->viewStartFrameForTest() > 0);
+    const int64_t start = panel->viewStartFrameForTest();
+    QVERIFY(start <= farFrame);
+    QVERIFY(farFrame < start + int64_t((panel->width() - TrackPanel::kHeaderWidth) * 100.0));
+
+    // Running out returns the playhead to the last seek point.
+    fake->finishPlayback();
+    QTRY_COMPARE(play->text(), QString("▶  Play"));
+    QCOMPARE(project->playheadFrame, int64_t(30000));
 }
 
 QTEST_MAIN(TestGui)

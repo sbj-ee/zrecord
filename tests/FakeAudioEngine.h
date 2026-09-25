@@ -47,6 +47,11 @@ public:
     void refreshPlayback() override { ++refreshCalls_; }
     int64_t playbackFrame() const override { return playbackFrame_; }
     void setPlaybackFrame(int64_t frame) { playbackFrame_ = frame; }
+    void seekPlayback(int64_t frame) override {
+        playbackFrame_ = frame;
+        lastSeek_ = frame;
+    }
+    int64_t lastSeek() const { return lastSeek_; }
     int refreshCalls() const { return refreshCalls_; }
 
     void setFilterSettings(const FilterSettings& settings) override { settings_ = settings; }
@@ -75,6 +80,7 @@ private:
     int lastRecordingChannels_ = 0;
     int refreshCalls_ = 0;
     int64_t playbackFrame_ = 0;
+    int64_t lastSeek_ = -1;
     FilterSettings settings_;
     std::vector<float> captured_;
 };

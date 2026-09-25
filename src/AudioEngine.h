@@ -54,6 +54,7 @@ public:
     bool isPlaying() const override;
     void refreshPlayback() override;
     int64_t playbackFrame() const override { return playbackFrame_.load(std::memory_order_relaxed); }
+    void seekPlayback(int64_t frame) override;
 
     void setFilterSettings(const FilterSettings& settings) override;
     FilterSettings filterSettings() const;
@@ -119,6 +120,7 @@ private:
     int playbackChannels_ = 1;
     size_t playbackPos_ = 0; // audio thread while the stream runs
     std::atomic<int64_t> playbackFrame_{0};
+    std::atomic<int64_t> seekRequest_{-1}; // UI -> audio thread; -1 = none
     std::atomic<bool> playbackFinished_{false}; // set by the audio thread at the end
 
     std::atomic<float> peakLevel_{0.0f};

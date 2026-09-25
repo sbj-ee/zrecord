@@ -45,6 +45,8 @@ public:
     virtual void refreshPlayback() = 0;
     // The frame playback has reached (valid while playing and just after).
     virtual int64_t playbackFrame() const = 0;
+    // Jumps running playback to `frame` without restarting the stream.
+    virtual void seekPlayback(int64_t frame) = 0;
 
     virtual void setFilterSettings(const FilterSettings& settings) = 0;
 
