@@ -739,6 +739,13 @@ void MainWindow::onToggleRecord() {
         // for a stereo project is upmixed when it's added.
         recordingChannels_ = std::max(1, std::min(project_.channels, selectedDeviceMaxChannels()));
 
+        // Playback and capture would otherwise fight over the device (and
+        // playback's stream kept running under the take, unstoppable once
+        // the controls were disabled).
+        if (playbackActive_ || engine_->isPlaying()) {
+            stopPlaybackNow();
+        }
+
         std::string error;
         if (engine_->startRecording(deviceIndex, recordingChannels_, project_.sampleRate, error)) {
             recordButton_->setText("■  STOP");

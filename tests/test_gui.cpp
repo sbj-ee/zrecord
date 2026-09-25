@@ -58,6 +58,7 @@ private slots:
     void mainWindowAsksBeforeDiscardingUnsavedChanges();
     void mainWindowRecordsWithTheDevicesChannelCount();
     void playheadFollowsPlayback();
+    void recordingStopsPlayback();
 
 private:
     Project project_;
@@ -651,6 +652,33 @@ void TestGui::playheadFollowsPlayback() {
     fake->finishPlayback();
     QTRY_COMPARE(play->text(), QString("▶  Play"));
     QCOMPARE(project->playheadFrame, int64_t(1000));
+}
+
+void TestGui::recordingStopsPlayback() {
+    // Regression: starting a take while playing left playback running.
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    Track track;
+    Clip clip;
+    clip.channels = 2;
+    clip.samples = SampleBuffer(size_t(2 * 48000), 0.1f);
+    track.clips.push_back(clip);
+    track.recordArmed = true;
+    project->tracks.push_back(std::move(track));
+
+    QPushButton* play = findButton(window, "▶  Play");
+    QPushButton* record = findButton(window, "●  RECORD");
+    QVERIFY(play != nullptr && record != nullptr);
+    play->click();
+    QVERIFY(fake->isPlaying());
+    record->click();
+    QVERIFY(fake->isRecording());
+    QVERIFY(!fake->isPlaying());
+    QCOMPARE(fake->stopPlaybackCalls(), 1);
+    QCOMPARE(play->text(), QString("▶  Play"));
+    record->click();
 }
 
 QTEST_MAIN(TestGui)

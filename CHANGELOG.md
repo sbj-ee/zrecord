@@ -75,6 +75,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The playhead moves during playback.** It used to stay where playback
   started until you pressed Stop. When playback runs to the end, the
   playhead goes back to its starting point.
+- **Recording stops playback.** Starting a take during playback used to
+  leave playback running underneath it, and with Play disabled during the
+  take there was no way to stop it.
 
 ## [0.2.0]
 
