@@ -61,6 +61,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mute, solo, gain or display counts as a change. Quitting mid-take keeps the
   take and asks as usual. Saving reports in the status bar instead of a
   dialog.
+- **Moving a filter control mid-take no longer glitches the take.** Every
+  slider tick rebuilt the whole filter chain, resetting the noise gate (it
+  re-opened from silence), cutting the echo tail and zeroing the filters'
+  state, even for controls that were switched off. Settings changes now
+  update coefficients in place; a stage only starts fresh when it is switched
+  on.
 
 ## [0.2.0]
 

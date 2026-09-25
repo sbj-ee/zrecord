@@ -36,7 +36,6 @@ void Biquad::configure(Type type, double sampleRate, double cutoffHz, double q) 
     b2_ = b2 / a0;
     a1_ = a1 / a0;
     a2_ = a2 / a0;
-    reset();
 }
 
 float Biquad::process(float x) {
@@ -61,7 +60,6 @@ void NoiseGate::configure(double sampleRate, double thresholdDb, double attackMs
     };
     attackCoeff_ = timeToCoeff(attackMs);
     releaseCoeff_ = timeToCoeff(releaseMs);
-    reset();
 }
 
 float NoiseGate::process(float x) {
@@ -94,7 +92,6 @@ void Compressor::configure(double sampleRate, double thresholdDb, double ratio, 
     };
     attackCoeff_ = timeToCoeff(attackMs);
     releaseCoeff_ = timeToCoeff(releaseMs);
-    reset();
 }
 
 float Compressor::process(float x) {
@@ -124,7 +121,6 @@ void Limiter::configure(double sampleRate, double ceilingDb, double releaseMs) {
     ceilingLinear_ = std::pow(10.0, ceilingDb / 20.0);
     double seconds = std::max(releaseMs, 1.0) / 1000.0;
     releaseCoeff_ = std::exp(-1.0 / (sampleRate * seconds));
-    reset();
 }
 
 float Limiter::process(float x) {
@@ -147,7 +143,6 @@ void Limiter::reset() {
 void RingModulator::configure(double sampleRate, double carrierHz) {
     sampleRate_ = sampleRate;
     carrierHz_ = carrierHz;
-    reset();
 }
 
 float RingModulator::process(float x) {
@@ -242,46 +237,88 @@ float PitchShifter::process(float x) {
 
 void Distortion::configure(double driveAmount) {
     driveAmount_ = driveAmount;
+    normalizer_ = std::tanh(driveAmount_);
 }
 
 float Distortion::process(float x) const {
-    double normalizer = std::tanh(driveAmount_);
-    return static_cast<float>(std::tanh(driveAmount_ * x) / normalizer);
+    return static_cast<float>(std::tanh(driveAmount_ * x) / normalizer_);
 }
 
 void FilterChain::prepare(double sampleRate, int channels) {
+    // The one structural step: sizes every per-channel stage and allocates
+    // the echo lines. Called before the stream starts, never from the audio
+    // callback.
     sampleRate_ = sampleRate;
     channels_ = std::max(1, channels);
-    reconfigureFilters();
+    const auto n = static_cast<size_t>(channels_);
+    limiter_.assign(n, Limiter{});
+    highPass_.assign(n, Biquad{});
+    lowPass_.assign(n, Biquad{});
+    noiseGate_.assign(n, NoiseGate{});
+    compressor_.assign(n, Compressor{});
+    ringMod_.assign(n, RingModulator{});
+    echo_.assign(n, EchoEffect{});
+    pitchShifter_.assign(n, PitchShifter{});
+    distortion_.assign(n, Distortion{});
+    for (int c = 0; c < channels_; ++c) {
+        // Fixed-parameter effects: configured once here.
+        ringMod_[c].configure(sampleRate_, 30.0);
+        echo_[c].configure(sampleRate_, 280.0, 0.35, 0.5);
+        distortion_[c].configure(6.0);
+    }
+    applyParameters();
+    for (int c = 0; c < channels_; ++c) {
+        limiter_[c].reset();
+        highPass_[c].reset();
+        lowPass_[c].reset();
+        noiseGate_[c].reset();
+        compressor_[c].reset();
+        ringMod_[c].reset();
+        echo_[c].reset();
+        pitchShifter_[c].reset();
+    }
 }
 
 void FilterChain::setSettings(const FilterSettings& settings) {
+    if (limiter_.size() != static_cast<size_t>(channels_)) {
+        settings_ = settings;
+        prepare(sampleRate_, channels_); // never prepared: size things first
+        return;
+    }
+    // Parameter changes only: recompute coefficients in place and keep every
+    // stage's running state, so dragging a slider mid-take neither allocates
+    // on the audio thread nor clicks, re-attacks the gate or cuts the echo.
+    const FilterSettings previous = settings_;
     settings_ = settings;
-    reconfigureFilters();
+    applyParameters();
+
+    // A stage that was off has stale state from whenever it last ran; start
+    // it from rest instead.
+    for (int c = 0; c < channels_; ++c) {
+        if (settings.limiterEnabled && !previous.limiterEnabled) limiter_[c].reset();
+        if (settings.highPassEnabled && !previous.highPassEnabled) highPass_[c].reset();
+        if (settings.lowPassEnabled && !previous.lowPassEnabled) lowPass_[c].reset();
+        if (settings.noiseGateEnabled && !previous.noiseGateEnabled) noiseGate_[c].reset();
+        if (settings.compressorEnabled && !previous.compressorEnabled) compressor_[c].reset();
+        if (settings.voiceEffect != previous.voiceEffect) {
+            ringMod_[c].reset();
+            echo_[c].reset();
+            pitchShifter_[c].reset();
+        }
+    }
 }
 
 FilterSettings FilterChain::settings() const {
     return settings_;
 }
 
-void FilterChain::reconfigureFilters() {
-    limiter_.assign(static_cast<size_t>(channels_), Limiter{});
-    highPass_.assign(static_cast<size_t>(channels_), Biquad{});
-    lowPass_.assign(static_cast<size_t>(channels_), Biquad{});
-    noiseGate_.assign(static_cast<size_t>(channels_), NoiseGate{});
-    compressor_.assign(static_cast<size_t>(channels_), Compressor{});
-    ringMod_.assign(static_cast<size_t>(channels_), RingModulator{});
-    echo_.assign(static_cast<size_t>(channels_), EchoEffect{});
-    pitchShifter_.assign(static_cast<size_t>(channels_), PitchShifter{});
-    distortion_.assign(static_cast<size_t>(channels_), Distortion{});
-
+void FilterChain::applyParameters() {
     double pitchRatio = 1.0;
     if (settings_.voiceEffect == VoiceEffect::DeepVoice) {
         pitchRatio = 0.75;
     } else if (settings_.voiceEffect == VoiceEffect::Chipmunk) {
         pitchRatio = 1.5;
     }
-
     for (int c = 0; c < channels_; ++c) {
         limiter_[c].configure(sampleRate_, settings_.limiterCeilingDb, 50.0);
         highPass_[c].configure(Biquad::Type::HighPass, sampleRate_, settings_.highPassHz);
@@ -290,10 +327,7 @@ void FilterChain::reconfigureFilters() {
                                  settings_.noiseGateAttackMs, settings_.noiseGateReleaseMs);
         compressor_[c].configure(sampleRate_, settings_.compressorThresholdDb,
                                   settings_.compressorRatio, 10.0, 150.0);
-        ringMod_[c].configure(sampleRate_, 30.0);
-        echo_[c].configure(sampleRate_, 280.0, 0.35, 0.5);
         pitchShifter_[c].configure(pitchRatio);
-        distortion_[c].configure(6.0);
     }
 }
 
@@ -385,8 +419,8 @@ void mixEqualPowerCrossfade(std::vector<float>& outgoing, const std::vector<floa
     for (size_t frame = 0; frame < frameCount; ++frame) {
         double position = frameCount > 1 ? static_cast<double>(frame) / lastFrame : 1.0;
         // cos/sin keep gainOut^2 + gainIn^2 == 1 across the whole ramp.
-        float gainOut = static_cast<float>(std::cos(position * M_PI / 2.0));
-        float gainIn = static_cast<float>(std::sin(position * M_PI / 2.0));
+        float gainOut = static_cast<float>(std::cos(position * kPi / 2.0));
+        float gainIn = static_cast<float>(std::sin(position * kPi / 2.0));
         for (int c = 0; c < channels; ++c) {
             size_t i = frame * static_cast<size_t>(channels) + static_cast<size_t>(c);
             outgoing[i] = outgoing[i] * gainOut + incoming[i] * gainIn;

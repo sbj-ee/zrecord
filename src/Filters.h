@@ -35,7 +35,7 @@ private:
     double attackCoeff_ = 0.0;
     double releaseCoeff_ = 0.0;
     double envelope_ = 0.0;
-    double gain_ = 1.0;
+    double gain_ = 0.0; // starts closed, as reset() leaves it
 };
 
 // Downward compressor: reduces gain above a threshold by a fixed ratio,
@@ -128,6 +128,7 @@ public:
 
 private:
     double driveAmount_ = 6.0;
+    double normalizer_ = 0.99998771; // tanh(6)
 };
 
 enum class VoiceEffect { None, Robot, Echo, DeepVoice, Chipmunk, Distortion };
@@ -164,7 +165,12 @@ struct FilterSettings {
 // really does cap the output. Each channel gets independent filter state.
 class FilterChain {
 public:
+    // Sizes and allocates everything and resets all state. Not real-time
+    // safe: call it before the stream starts.
     void prepare(double sampleRate, int channels);
+    // Real-time safe once prepared: updates coefficients in place without
+    // allocating and keeps each stage's state (a stage being switched on
+    // starts from rest). The stages' configure() likewise never resets.
     void setSettings(const FilterSettings& settings);
     FilterSettings settings() const;
 
@@ -187,7 +193,7 @@ private:
     std::vector<PitchShifter> pitchShifter_;
     std::vector<Distortion> distortion_;
 
-    void reconfigureFilters();
+    void applyParameters(); // coefficients only: no allocation, state kept
 };
 
 enum class FadeShape { In, Out };
