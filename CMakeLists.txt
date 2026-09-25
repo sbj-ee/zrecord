@@ -70,6 +70,7 @@ add_library(zrecord_core STATIC
     src/PlaybackMixer.cpp
     src/Resampler.cpp
     src/Gain.cpp
+    src/VoiceChanger.cpp
 )
 
 target_include_directories(zrecord_core PUBLIC src)

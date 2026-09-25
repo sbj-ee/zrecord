@@ -5,6 +5,7 @@
 
 #include "Filters.h"
 #include "Gain.h"
+#include "VoiceChanger.h"
 
 #include <map>
 #include "Project.h"
@@ -280,19 +281,51 @@ private:
 // Normalize / Amplify: one gain factor over a time selection or over whole
 // clips, possibly on several tracks, as a single undo step. Snapshots are
 // per affected track and cheap (clip audio is shared, copy-on-write).
-class GainCommand : public QUndoCommand {
+class TargetsEditCommand : public QUndoCommand {
 public:
-    GainCommand(Project& project, std::vector<GainTarget> targets, float gain, const QString& text);
+    TargetsEditCommand(Project& project, std::vector<GainTarget> targets, const QString& text);
 
     void undo() override;
     void redo() override;
 
+protected:
+    // Processes the targets in project(); called once, on the first redo().
+    virtual void apply(Project& project, const std::vector<GainTarget>& targets) = 0;
+
 private:
     Project& project_;
     std::vector<GainTarget> targets_;
-    float gain_;
     std::map<int, Track> before_;
     std::map<int, Track> after_;
+    bool applied_ = false;
+};
+
+class GainCommand : public TargetsEditCommand {
+public:
+    GainCommand(Project& project, std::vector<GainTarget> targets, float gain, const QString& text)
+        : TargetsEditCommand(project, std::move(targets), text), gain_(gain) {}
+
+protected:
+    void apply(Project& project, const std::vector<GainTarget>& targets) override { applyGain(project, targets, gain_); }
+
+private:
+    float gain_;
+};
+
+// Voice changer (pitch / formant / robot) over the targets, one undo step.
+class VoiceChangeCommand : public TargetsEditCommand {
+public:
+    VoiceChangeCommand(Project& project, std::vector<GainTarget> targets, const VoiceSettings& settings,
+                       const QString& text)
+        : TargetsEditCommand(project, std::move(targets), text), settings_(settings) {}
+
+protected:
+    void apply(Project& project, const std::vector<GainTarget>& targets) override {
+        applyVoiceChange(project, targets, settings_);
+    }
+
+private:
+    VoiceSettings settings_;
 };
 
 } // namespace zrecord
