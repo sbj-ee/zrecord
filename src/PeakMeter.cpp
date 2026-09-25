@@ -114,7 +114,8 @@ void PeakMeter::paintEvent(QPaintEvent*) {
     // Peak-hold marker.
     if (holdDb_ > kFloorDb) {
         const int xHold = xForDb(holdDb_, barLeft, barWidth);
-        painter.fillRect(QRect(xHold - 1, 0, 3, barHeight), holdDb_ >= 0.0f ? QColor(255, 80, 80) : QColor(255, 255, 255));
+        // Blue below full scale (white read as a gap in the bar), red at or over it.
+        painter.fillRect(QRect(xHold - 1, 0, 3, barHeight), holdDb_ >= 0.0f ? QColor(255, 80, 80) : QColor(70, 160, 255));
     }
 
     // Scale.

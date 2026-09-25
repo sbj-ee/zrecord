@@ -1231,7 +1231,7 @@ void MainWindow::onNormalize() {
     if (!project_.selection.isEmpty()) {
         const Selection& sel = project_.selection;
         targets.push_back(GainTarget{sel.trackIndex, sel.startFrame, sel.endFrame});
-        scope = QString("the selection (%1)").arg(formatDuration(double(sel.endFrame - sel.startFrame) / project_.sampleRate));
+        scope = QString("the selection (%1 s)").arg(double(sel.endFrame - sel.startFrame) / project_.sampleRate, 0, 'f', 2);
     } else {
         for (const auto& [trackIndex, clipIndex] : trackPanel_->selectedClips()) {
             if (trackIndex < 0 || trackIndex >= static_cast<int>(project_.tracks.size())) {
