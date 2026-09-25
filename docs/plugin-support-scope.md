@@ -10,34 +10,29 @@ third-party ones. This document scopes what that would take, recommends a
 starting standard, and — most importantly — names one prerequisite that has to
 be dealt with first.
 
-## The prerequisite: the audio callback is not real-time safe
+## The prerequisite: a real-time-safe audio path (done)
 
-`AudioEngine::handleInput` runs on the PortAudio callback thread and currently
-does three things no real-time audio callback should:
+When this was first written, `AudioEngine::handleInput` allocated a block on
+every callback, took a mutex shared with the UI, and grew the capture buffer
+without bound, and the playback callback locked the whole project. Hosting
+third-party code in that path would have turned latent dropouts into audible
+ones that users blame on zrecord rather than on the plugin, so it was made a
+hard blocker for any live-chain hosting.
 
-```cpp
-std::vector<float> block(frameCount * channels_, 0.0f);   // heap allocation
-std::lock_guard<std::mutex> lock(captureMutex_);          // unbounded blocking
-captureBuffer_.insert(...);                               // reallocates, grows forever
-```
+That work is now done (see the [Unreleased] changelog):
 
-Today this mostly works: buffers are small, the mutex is barely contended, and a
-desktop machine absorbs the jitter. It is still a latent source of dropouts
-under load, and it is a **hard blocker for hosting third-party code in the live
-chain** — a plugin is free to allocate, lock, or simply take too long, and any
-of those turn a latent problem into an audible one that users will blame on
-zrecord rather than on the plugin.
+- the capture block is preallocated when recording starts and never grown on
+  the audio thread (a larger host block is processed in slices);
+- captured audio leaves through a lock-free ring buffer drained by the UI;
+- filter settings reach the callback via `try_lock` (never blocking), and
+  parameter changes update coefficients in place without allocating;
+- playback renders from an atomically published, immutable snapshot of the
+  project, with no lock and no allocation in the callback.
 
-**Nothing should be hosted in the live chain until this is fixed.** The fix is
-well-understood and independent of plugins:
-
-- preallocate the processing block at `startRecording` and reuse it;
-- replace the capture mutex with a lock-free ring buffer drained by the UI
-  thread;
-- grow `captureBuffer_` off the audio thread.
-
-This is worth doing on its own merits, and it is the reason the phasing below
-puts offline effects before live ones.
+What remains specific to plugins is their own behaviour: a plugin can still
+allocate, lock or overrun inside `run()`. That is a reason to keep live hosting
+last (Phase 4) and to preallocate every port buffer at instantiation, not a
+blocker for the offline phases.
 
 ## Which standard
 
@@ -75,8 +70,8 @@ dropout.
 per control port, honouring range, default, logarithmic and toggle hints).
 No plugin-provided GUIs — that is a separate and much larger problem.
 
-**Phase 4 — live chain.** Only after the real-time work above. Plugins run in
-the recording path with preallocated buffers.
+**Phase 4 — live chain.** The engine side is ready (see above). Plugins run
+in the recording path with every buffer preallocated at instantiation.
 
 **Phase 5 — persistence.** Plugin identity plus parameter values in
 `project.json`, and a decision about what happens when a project is opened on a
@@ -110,4 +105,5 @@ generated parameter controls only.
 
 Phase 1 and 2 together are the bulk of the value and are perhaps a week of
 focused work including tests. Phases 3–5 are comparable again. The real-time
-prerequisite is separate and should be scheduled on its own merits.
+prerequisite has since been done on its own merits, so it no longer adds to
+this estimate.

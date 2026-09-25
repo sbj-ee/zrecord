@@ -26,6 +26,25 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   meter. It shows the input while recording and the mix while playing.
   Peaks are taken as the maximum since the last screen update, so a brief
   over can't slip between updates.
+- **Help > About** shows the version, with the Qt and PortAudio versions.
+
+### Changed
+
+- **Development builds say so.** Any build other than the release tag is
+  versioned `<version>+g<commit>` (e.g. `0.2.0+g1a2b3c4`) in the .deb and
+  the About box. `-DZRECORD_RELEASE=ON` gives the plain version.
+- **Packaging.** Building the .deb now fails with a clear message if
+  `dpkg-shlibdeps` is missing, rather than producing a package with no
+  dependencies. The package now recommends `pulseaudio-utils` (for `pactl`,
+  used by the mic volume slider). libsamplerate is a new build and run
+  dependency.
+- **Project folders.** Clip audio now lives in an `audio-<id>/` folder that
+  each save replaces (older projects with `audio/` still open, and are
+  converted on their next save).
+- **CI and releases.** The tests also run under AddressSanitizer and
+  UndefinedBehaviorSanitizer in CI. The .deb's metadata is checked on
+  every build. A tag-triggered workflow (`v*`) builds, tests and publishes
+  a GitHub Release with the .deb attached.
 
 ### Fixed
 
@@ -103,6 +122,17 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without checking. Each save now writes its audio into a new folder,
   replaces project.json atomically, and only then removes the previous
   audio. WAVs of deleted clips no longer build up in the project folder.
+- **Clip selections can't go stale.** Clips picked with the Move tool were
+  remembered by position, so after an undo, redo or paste a drag could move
+  a different clip. The pick is now cleared whenever the tracks change.
+- **Audio start-up failures are reported.** If PortAudio failed to start,
+  the error was ignored and surfaced later as an empty device list. Record
+  and Play now report it.
+- **No allocation on the recording thread.** A host that delivered a larger
+  audio block than expected made the recording callback allocate. Such
+  blocks are now processed in pieces.
+- **The timeline's layout no longer waits on the project lock**, the last
+  place a repaint could be held up by it.
 
 ## [0.2.0]
 
@@ -131,6 +161,8 @@ makes editing safe.
 - **Labels and markers** on a timeline strip: `Ctrl+B` labels the selection or
   the playhead; double-click renames, right-click offers rename or delete.
 - **Spectrogram view** per track, toggled from the track header.
+- **Volume envelopes** per track, drawn with the Envelope tool (click to add a
+  point, drag to move, right-click to delete) and applied on playback and export.
 - **Keyboard control** throughout, following Audacity's bindings where they
   apply (`Space`, `R`, `Ctrl+Z`, `Ctrl+X/C/V`, `Ctrl+1`/`3`/`F`, `F1`/`F5`), plus
   a menu bar that advertises every shortcut.
@@ -152,7 +184,7 @@ makes editing safe.
 
 - Labels sit at absolute positions and do not follow ripple edits.
 - The spectrogram recomputes on every repaint rather than caching.
-- No envelope editing and no plugin (LADSPA/LV2/VST) support.
+- No plugin (LADSPA/LV2/VST) support.
 
 ## [0.1.0]
 
