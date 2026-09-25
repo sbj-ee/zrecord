@@ -181,6 +181,10 @@ bool TrackPanel::canPlaceClip(int trackIndex, int64_t start, int64_t length, con
 }
 
 void TrackPanel::refresh() {
+    // Clip selections are (track, index) pairs; after whatever edit, undo or
+    // redo prompted this refresh they may name different clips, and a later
+    // drag would move the wrong ones.
+    selectedClips_.clear();
     rebuildHeaders();
     updateScrollBarRange();
     update();

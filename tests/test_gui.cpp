@@ -60,6 +60,7 @@ private slots:
     void mainWindowRecordsWithTheDevicesChannelCount();
     void playheadFollowsPlayback();
     void recordingStopsPlayback();
+    void clipSelectionIsDroppedWhenTracksChange();
 
 private:
     Project project_;
@@ -680,6 +681,21 @@ void TestGui::recordingStopsPlayback() {
     QCOMPARE(fake->stopPlaybackCalls(), 1);
     QCOMPARE(play->text(), QString("▶  Play"));
     record->click();
+}
+
+void TestGui::clipSelectionIsDroppedWhenTracksChange() {
+    // Regression: selected clips are (track, index) pairs that outlived
+    // undo/redo/paste, so a later drag could move a clip that was never
+    // outlined.
+    panel_.setTool(TrackPanel::Tool::Move);
+    const QPoint onClip(TrackPanel::kHeaderWidth + 100, laneCentreY(0));
+    QTest::mouseClick(&panel_, Qt::LeftButton, Qt::NoModifier, onClip);
+    QCOMPARE(panel_.selectedClipCountForTest(), size_t(1));
+
+    project_.tracks[0].clips.insert(project_.tracks[0].clips.begin(), makeClip(0, 100));
+    project_.tracks[0].clips[1].startFrame = 50000;
+    panel_.refresh(); // what MainWindow does after every edit, undo and redo
+    QCOMPARE(panel_.selectedClipCountForTest(), size_t(0));
 }
 
 QTEST_MAIN(TestGui)

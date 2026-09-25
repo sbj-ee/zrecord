@@ -44,6 +44,7 @@ public:
     Project* projectForTest() const { return project_; }
     // How many spectrogram tiles have been computed so far (cache misses).
     int spectrogramTilesRenderedForTest() const { return spectrogramTilesRendered_; }
+    size_t selectedClipCountForTest() const { return selectedClips_.size(); }
 
     void setSnapEnabled(bool enabled);
     bool snapEnabled() const { return snapEnabled_; }
