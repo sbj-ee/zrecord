@@ -243,11 +243,13 @@ void TrackPanel::rebuildHeaders() {
         connect(header.muteButton, &QToolButton::toggled, this, [this, index](bool checked) {
             if (project_ == nullptr) return;
             project_->tracks[static_cast<size_t>(index)].muted = checked;
+            emit trackSettingsChanged();
             update();
         });
         connect(header.soloButton, &QToolButton::toggled, this, [this, index](bool checked) {
             if (project_ == nullptr) return;
             project_->tracks[static_cast<size_t>(index)].soloed = checked;
+            emit trackSettingsChanged();
             update();
         });
         connect(header.armButton, &QToolButton::toggled, this, [this, index](bool checked) {
@@ -267,11 +269,13 @@ void TrackPanel::rebuildHeaders() {
             if (project_ == nullptr) return;
             project_->tracks[static_cast<size_t>(index)].display =
                 checked ? TrackDisplay::Spectrogram : TrackDisplay::Waveform;
+            emit trackSettingsChanged();
             update();
         });
         connect(header.gainSlider, &QSlider::valueChanged, this, [this, index](int value) {
             if (project_ == nullptr) return;
             project_->tracks[static_cast<size_t>(index)].gainDb = value;
+            emit trackSettingsChanged();
             update();
         });
 

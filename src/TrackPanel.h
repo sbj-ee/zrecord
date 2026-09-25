@@ -86,6 +86,10 @@ signals:
 
     // A finished envelope edit: the track's complete new point list, which
     // MainWindow turns into one undoable step.
+    // A saved track setting (mute, solo, gain, display) was changed from its
+    // header. These aren't undoable, but they do make the project unsaved.
+    void trackSettingsChanged();
+
     // One finished envelope gesture: the curve before it and after it.
     void envelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& before,
                         const std::vector<EnvelopePoint>& after, const QString& what);

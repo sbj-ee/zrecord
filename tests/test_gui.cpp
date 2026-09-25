@@ -1,3 +1,4 @@
+#include <QMessageBox>
 #include <QPushButton>
 #include <QUndoStack>
 #include <QtTest>
@@ -53,6 +54,7 @@ private slots:
     void mainWindowRefreshesPlaybackWhilePlaying();
     void mainWindowImportResamplesToTheProjectRate();
     void envelopeDragIsOneUndoableStep();
+    void mainWindowAsksBeforeDiscardingUnsavedChanges();
 
 private:
     Project project_;
@@ -503,6 +505,57 @@ void TestGui::envelopeDragIsOneUndoableStep() {
     QTest::mouseClick(&panel_, Qt::LeftButton, {}, QPoint(x, top + 70));
     QCOMPARE(stack.count(), count);
     panel_.disconnect(&stack);
+}
+
+void TestGui::mainWindowAsksBeforeDiscardingUnsavedChanges() {
+    // Regression: Quit and Open discarded edits silently, and New asked based
+    // on "anything ever done" (so it asked right after a save).
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    QStringList asked;
+    int answer = QMessageBox::Cancel;
+    window.setUnsavedChangesPromptForTest([&](const QString& action) {
+        asked << action;
+        return answer;
+    });
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+
+    QVERIFY(!window.hasUnsavedChanges());
+    QVERIFY(window.close()); // nothing to lose: closes without asking
+    QVERIFY(asked.isEmpty());
+    window.show();
+
+    findAction(window, "+Track")->trigger();
+    QVERIFY(window.hasUnsavedChanges());
+    QVERIFY(window.isWindowModified());
+
+    QVERIFY(!window.close()); // Cancel keeps the window open
+    QCOMPARE(asked.size(), 1);
+    QVERIFY(asked[0].contains("quit"));
+
+    findAction(window, "New")->trigger(); // Cancel keeps the project
+    QCOMPARE(project->tracks.size(), size_t(1));
+
+    QString error;
+    QVERIFY2(window.saveProjectTo(dir.filePath("p.zrproj"), &error), qPrintable(error));
+    QVERIFY(!window.hasUnsavedChanges());
+    QVERIFY(!window.isWindowModified());
+    QVERIFY(window.windowTitle().startsWith("p"));
+
+    // Undoing past the save point is a change; redoing back to it isn't.
+    findAction(window, "Undo")->trigger();
+    QVERIFY(window.hasUnsavedChanges());
+    findAction(window, "Redo")->trigger();
+    QVERIFY(!window.hasUnsavedChanges());
+
+    asked.clear();
+    answer = QMessageBox::Discard;
+    findAction(window, "+Track")->trigger();
+    findAction(window, "New")->trigger();
+    QCOMPARE(asked.size(), 1);
+    QVERIFY(project->tracks.empty());
+    QVERIFY(!window.hasUnsavedChanges());
 }
 
 QTEST_MAIN(TestGui)

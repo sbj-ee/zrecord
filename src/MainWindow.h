@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <functional>
 #include <memory>
 
 #include "AudioEngineInterface.h"
@@ -79,6 +80,21 @@ public:
     // its dialog). `note` gets a short description of any conversion.
     bool importAudioFile(const QString& path, QString* error = nullptr, QString* note = nullptr);
 
+    // Saves to a .zrproj folder and marks the project saved (what File > Save
+    // does after its dialog).
+    bool saveProjectTo(const QString& path, QString* error = nullptr);
+    bool hasUnsavedChanges() const;
+
+    // What the "unsaved changes" question returns: Save, Discard or Cancel.
+    // Tests replace the dialog with a function.
+    using UnsavedChangesPrompt = std::function<int(const QString& action)>;
+    void setUnsavedChangesPromptForTest(UnsavedChangesPrompt prompt) { unsavedPrompt_ = std::move(prompt); }
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
+public:
+
 private:
     void buildUi();
     // Menus reuse the same QActions the toolbar shows, so the two can't drift
@@ -93,6 +109,12 @@ private:
     // Stops playback (if any) and resets the Play button; used before the
     // project it reads from is replaced.
     void stopPlaybackNow();
+    // Asks before `action` would discard unsaved changes. True to go ahead
+    // (nothing unsaved, saved, or discarded), false if the user cancelled.
+    bool confirmDiscardChanges(const QString& action);
+    bool saveProjectInteractive();
+    void markSaved(const QString& path);
+    void updateWindowTitle();
 
     Project project_;
     std::unique_ptr<AudioEngineInterface> engine_;
@@ -101,6 +123,9 @@ private:
     // True from a successful startPlayback() until the stream is released,
     // including after it ends by itself (onTick releases it then).
     bool playbackActive_ = false;
+    QString projectPath_;          // last saved/opened .zrproj, if any
+    bool settingsDirty_ = false;   // header changes outside the undo stack
+    UnsavedChangesPrompt unsavedPrompt_;
 
     QComboBox* deviceCombo_ = nullptr;
     QComboBox* channelsCombo_ = nullptr;

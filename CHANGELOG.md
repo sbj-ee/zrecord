@@ -53,6 +53,14 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   left the point where it was dragged to, and a single click added two undo
   steps. Each press-drag-release is now exactly one undo step (none if the
   point didn't move).
+- **Unsaved changes are protected.** Quit and Open used to discard edits
+  without asking, and New asked whenever anything had ever been done, even
+  right after a save. The title bar now shows the project name with `*` when
+  it has unsaved changes, and Quit, New and Open offer Save / Discard /
+  Cancel. Undoing back to the saved state counts as saved; changing a track's
+  mute, solo, gain or display counts as a change. Quitting mid-take keeps the
+  take and asks as usual. Saving reports in the status bar instead of a
+  dialog.
 
 ## [0.2.0]
 

@@ -2,6 +2,8 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QCloseEvent>
+#include <QFileInfo>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -67,6 +69,13 @@ MainWindow::MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* pa
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, &MainWindow::onTick);
     timer_->start(50);
+
+    connect(undoStack_, &QUndoStack::cleanChanged, this, [this](bool) { updateWindowTitle(); });
+    connect(trackPanel_, &TrackPanel::trackSettingsChanged, this, [this] {
+        settingsDirty_ = true;
+        updateWindowTitle();
+    });
+    updateWindowTitle();
 }
 
 MainWindow::~MainWindow() {
@@ -82,7 +91,6 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::buildUi() {
-    setWindowTitle("zrecord");
 
     auto* central = new QWidget(this);
     auto* rootLayout = new QVBoxLayout(central);
@@ -802,20 +810,69 @@ void MainWindow::onExport() {
 }
 
 void MainWindow::onNewProject() {
-    if (undoStack_->count() > 0) {
-        auto reply = QMessageBox::question(this, "New Project", "Discard the current project and start a new one?");
-        if (reply != QMessageBox::Yes) {
-            return;
-        }
+    if (!confirmDiscardChanges("starting a new project")) {
+        return;
     }
     stopPlaybackNow();
     project_.reset();
     undoStack_->clear();
     trackPanel_->refresh();
     setControlsEnabled(false);
+    markSaved(QString()); // an empty project has nothing to lose
+}
+
+bool MainWindow::hasUnsavedChanges() const {
+    return !undoStack_->isClean() || settingsDirty_;
+}
+
+void MainWindow::updateWindowTitle() {
+    QString name = projectPath_.isEmpty() ? QString("Untitled") : QFileInfo(projectPath_).completeBaseName();
+    setWindowTitle(QString("%1[*] \u2014 zrecord").arg(name));
+    setWindowModified(hasUnsavedChanges());
+}
+
+void MainWindow::markSaved(const QString& path) {
+    projectPath_ = path;
+    settingsDirty_ = false;
+    undoStack_->setClean();
+    updateWindowTitle();
+}
+
+bool MainWindow::confirmDiscardChanges(const QString& action) {
+    if (!hasUnsavedChanges()) {
+        return true;
+    }
+    int answer = 0;
+    if (unsavedPrompt_) {
+        answer = unsavedPrompt_(action);
+    } else {
+        answer = QMessageBox::question(
+            this, "Unsaved changes",
+            QString("The project has unsaved changes. Save them before %1?").arg(action),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+    }
+    if (answer == QMessageBox::Save) {
+        return saveProjectInteractive();
+    }
+    return answer == QMessageBox::Discard;
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (engine_->isRecording()) {
+        onToggleRecord(); // keep the take: stop and add it, then ask as usual
+    }
+    if (!confirmDiscardChanges("quitting")) {
+        event->ignore();
+        return;
+    }
+    stopPlaybackNow();
+    event->accept();
 }
 
 void MainWindow::onOpenProject() {
+    if (!confirmDiscardChanges("opening another project")) {
+        return;
+    }
     QString dirPath = QFileDialog::getExistingDirectory(this, "Open Project (select a .zrproj folder)", QDir::homePath());
     if (dirPath.isEmpty()) {
         return;
@@ -842,24 +899,42 @@ bool MainWindow::openProjectFolder(const QString& path, QString* error) {
     trackPanel_->refresh();
     trackPanel_->zoomToFit();
     setControlsEnabled(false);
+    markSaved(path);
     return true;
 }
 
 void MainWindow::onSaveProject() {
-    QString defaultPath = QDir::homePath() + "/untitled.zrproj";
+    saveProjectInteractive();
+}
+
+bool MainWindow::saveProjectInteractive() {
+    QString defaultPath = projectPath_.isEmpty() ? QDir::homePath() + "/untitled.zrproj" : projectPath_;
     QString path = QFileDialog::getSaveFileName(this, "Save Project", defaultPath, "zrecord Project (*.zrproj)");
     if (path.isEmpty()) {
-        return;
+        return false;
     }
     if (!path.endsWith(".zrproj")) {
         path += ".zrproj";
     }
-    std::string error;
-    if (!ProjectFile::save(project_, path.toStdString(), error)) {
-        QMessageBox::warning(this, "Save failed", QString::fromStdString(error));
-        return;
+    QString error;
+    if (!saveProjectTo(path, &error)) {
+        QMessageBox::warning(this, "Save failed", error);
+        return false;
     }
-    QMessageBox::information(this, "Saved", "Project saved to:\n" + path);
+    statusLabel_->setText("Saved to " + path);
+    return true;
+}
+
+bool MainWindow::saveProjectTo(const QString& path, QString* error) {
+    std::string message;
+    if (!ProjectFile::save(project_, path.toStdString(), message)) {
+        if (error != nullptr) {
+            *error = QString::fromStdString(message);
+        }
+        return false;
+    }
+    markSaved(path);
+    return true;
 }
 
 void MainWindow::onAddTrack() {
