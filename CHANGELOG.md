@@ -78,6 +78,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Recording stops playback.** Starting a take during playback used to
   leave playback running underneath it, and with Play disabled during the
   take there was no way to stop it.
+- **Saving is atomic.** A save that failed part-way used to leave new clip
+  audio under the old project.json, and project.json itself was written
+  without checking. Each save now writes its audio into a new folder,
+  replaces project.json atomically, and only then removes the previous
+  audio. WAVs of deleted clips no longer build up in the project folder.
 
 ## [0.2.0]
 

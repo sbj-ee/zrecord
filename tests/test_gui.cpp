@@ -9,6 +9,7 @@
 #include "AudioFileWriter.h"
 #include "Commands.h"
 #include "ProjectFile.h"
+#include "SavedProjectPaths.h"
 #include "TrackPanel.h"
 
 using namespace zrecord;
@@ -303,7 +304,7 @@ void TestGui::mainWindowFailedOpenKeepsProjectAndUndo() {
         std::string error;
         QVERIFY2(ProjectFile::save(saved, good.toStdString(), error), error.c_str());
         QVERIFY2(ProjectFile::save(saved, broken.toStdString(), error), error.c_str());
-        QVERIFY(QFile::remove(broken + "/audio/track0_clip0.wav"));
+        QVERIFY(QFile::remove(savedClipFile(broken)));
     }
 
     MainWindow window(std::make_unique<FakeAudioEngine>());

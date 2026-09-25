@@ -4,6 +4,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
+#include <QUuid>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -20,8 +22,19 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
         errorMessage = "Could not create project folder";
         return false;
     }
-    QString audioDirPath = dir.filePath("audio");
-    QDir().mkpath(audioDirPath);
+
+    // Saving is all-or-nothing. Clip audio goes into a fresh directory that
+    // nothing references yet, project.json is replaced atomically
+    // (QSaveFile: write a temp file, then rename), and only then are the
+    // previous save's audio directories removed. A save that fails anywhere
+    // leaves the previous project exactly as it was, and clips deleted since
+    // the last save don't linger as stale WAVs.
+    const QString audioDirName = "audio-" + QUuid::createUuid().toString(QUuid::Id128).left(12);
+    if (!dir.mkdir(audioDirName)) {
+        errorMessage = "Could not create the project's audio folder";
+        return false;
+    }
+    auto abandon = [&dir, &audioDirName]() { QDir(dir.filePath(audioDirName)).removeRecursively(); };
 
     std::lock_guard<std::mutex> lock(project.mutex);
 
@@ -50,7 +63,7 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
         QJsonArray clipsArray;
         for (size_t c = 0; c < track.clips.size(); ++c) {
             const Clip& clip = track.clips[c];
-            QString relativeFile = QString("audio/track%1_clip%2.wav").arg(t).arg(c);
+            QString relativeFile = QString("%1/track%2_clip%3.wav").arg(audioDirName).arg(t).arg(c);
             QString absoluteFile = dir.filePath(relativeFile);
 
             // Float, not 24-bit PCM: a project must reopen exactly as saved,
@@ -60,6 +73,7 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
             if (!AudioFileWriter::writeFloatWav(absoluteFile.toStdString(), clip.samples,
                                                  static_cast<int>(project.sampleRate), clip.channels,
                                                  errorMessage)) {
+                abandon();
                 return false;
             }
 
@@ -85,12 +99,22 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
     }
     root["labels"] = labelsArray;
 
-    QFile jsonFile(dir.filePath("project.json"));
-    if (!jsonFile.open(QIODevice::WriteOnly)) {
-        errorMessage = "Could not write project.json";
+    const QByteArray json = QJsonDocument(root).toJson();
+    QSaveFile jsonFile(dir.filePath("project.json"));
+    if (!jsonFile.open(QIODevice::WriteOnly) || jsonFile.write(json) != json.size() || !jsonFile.commit()) {
+        errorMessage = "Could not write project.json: " + jsonFile.errorString().toStdString();
+        abandon();
         return false;
     }
-    jsonFile.write(QJsonDocument(root).toJson());
+
+    // Committed: the previous save's audio (and the pre-0.2 "audio" folder)
+    // is now unreferenced. Only our own folder names are touched.
+    const QStringList audioDirs = dir.entryList({"audio", "audio-*"}, QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString& name : audioDirs) {
+        if (name != audioDirName) {
+            QDir(dir.filePath(name)).removeRecursively();
+        }
+    }
     return true;
 }
 

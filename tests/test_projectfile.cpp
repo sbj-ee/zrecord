@@ -5,6 +5,9 @@
 #include "AudioFileReader.h"
 #include "AudioFileWriter.h"
 #include "ProjectFile.h"
+#include "SavedProjectPaths.h"
+
+#include <QDirIterator>
 
 using namespace zrecord;
 
@@ -53,6 +56,8 @@ private slots:
     void integerExportClipsInsteadOfWrapping();
     void failedLoadLeavesProjectUntouched();
     void loadResamplesClipsAtAnotherRate();
+    void resaveReplacesAndPrunesStaleAudio();
+    void failedSaveKeepsThePreviousProject();
 };
 
 void TestProjectFile::saveKeepsSamplesBeyondFullScale() {
@@ -85,7 +90,7 @@ void TestProjectFile::savedClipsAreFloatWav() {
     QVERIFY2(ProjectFile::save(saved, path.toStdString(), error), error.c_str());
 
     SF_INFO info{};
-    SNDFILE* file = sf_open((path + "/audio/track0_clip0.wav").toStdString().c_str(), SFM_READ, &info);
+    SNDFILE* file = sf_open(savedClipFile(path).toStdString().c_str(), SFM_READ, &info);
     QVERIFY(file != nullptr);
     sf_close(file);
     QCOMPARE(info.format & SF_FORMAT_TYPEMASK, SF_FORMAT_WAV);
@@ -155,7 +160,7 @@ void TestProjectFile::failedLoadLeavesProjectUntouched() {
         std::string error;
         QVERIFY2(ProjectFile::save(other, path.toStdString(), error), error.c_str());
     }
-    QVERIFY(QFile::remove(path + "/audio/track0_clip0.wav"));
+    QVERIFY(QFile::remove(savedClipFile(path)));
 
     Project project;
     fill(project, {0.5f, -0.5f, 0.25f});
@@ -206,6 +211,86 @@ void TestProjectFile::loadResamplesClipsAtAnotherRate() {
     QVERIFY2(ProjectFile::load(loaded, root.toStdString(), error), error.c_str());
     const int64_t frames = loaded.tracks[0].clips[0].frameCount();
     QVERIFY2(std::llabs(frames - 44100) <= 2, qPrintable(QString::number(frames))); // still 0.5 s
+}
+
+namespace {
+QStringList wavsUnder(const QString& path) {
+    QStringList found;
+    QDirIterator it(path, {"*.wav"}, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        found << it.next();
+    }
+    found.sort();
+    return found;
+}
+} // namespace
+
+void TestProjectFile::resaveReplacesAndPrunesStaleAudio() {
+    // Regression: re-saving over a project left the WAVs of clips that no
+    // longer exist in audio/ forever.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("p.zrproj");
+    std::string error;
+    {
+        Project big;
+        fill(big, {0.1f, 0.2f});
+        for (int i = 0; i < 3; ++i) {
+            big.tracks[0].clips.push_back(big.tracks[0].clips[0]);
+        }
+        QVERIFY2(ProjectFile::save(big, path.toStdString(), error), error.c_str());
+    }
+    QCOMPARE(wavsUnder(path).size(), 4);
+    // An unrelated file in the project folder is left alone.
+    QFile notes(path + "/notes.txt");
+    QVERIFY(notes.open(QIODevice::WriteOnly));
+    notes.close();
+
+    Project small;
+    fill(small, {0.3f});
+    QVERIFY2(ProjectFile::save(small, path.toStdString(), error), error.c_str());
+    QCOMPARE(wavsUnder(path).size(), 1);
+    QVERIFY(QFile::exists(path + "/notes.txt"));
+
+    Project back;
+    QVERIFY2(ProjectFile::load(back, path.toStdString(), error), error.c_str());
+    QCOMPARE(back.tracks.size(), size_t(1));
+    QCOMPARE(back.tracks[0].clips.size(), size_t(1));
+    QCOMPARE(back.tracks[0].clips[0].samples.toVector(), std::vector<float>{0.3f});
+}
+
+void TestProjectFile::failedSaveKeepsThePreviousProject() {
+    // Regression: save overwrote clip WAVs in place and wrote project.json
+    // last (unchecked), so a save failing half-way left new audio under the
+    // old project.json -- a project that no longer matched either version.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("p.zrproj");
+    std::string error;
+    {
+        Project first;
+        fill(first, {0.1f, 0.2f});
+        first.tracks[0].clips.push_back(first.tracks[0].clips[0]);
+        QVERIFY2(ProjectFile::save(first, path.toStdString(), error), error.c_str());
+    }
+    const QStringList before = wavsUnder(path);
+
+    Project second;
+    fill(second, {0.9f, 0.9f});
+    Clip bad;
+    bad.channels = 0; // libsndfile refuses to write this: the save fails on clip 2
+    bad.samples = SampleBuffer(size_t(4), 0.5f);
+    second.tracks[0].clips.push_back(bad);
+    QVERIFY(!ProjectFile::save(second, path.toStdString(), error));
+    QVERIFY(!error.empty());
+
+    QCOMPARE(wavsUnder(path), before); // nothing half-written left behind
+    Project back;
+    QVERIFY2(ProjectFile::load(back, path.toStdString(), error), error.c_str());
+    QCOMPARE(back.tracks[0].clips.size(), size_t(2));
+    for (const Clip& clip : back.tracks[0].clips) {
+        QCOMPARE(clip.samples.toVector(), (std::vector<float>{0.1f, 0.2f}));
+    }
 }
 
 QTEST_GUILESS_MAIN(TestProjectFile)
