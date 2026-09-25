@@ -13,6 +13,7 @@ namespace zrecord {
 class ProjectFile {
 public:
     static bool save(const Project& project, const std::string& folderPath, std::string& errorMessage);
+    // All-or-nothing: on failure `project` is left exactly as it was.
     static bool load(Project& project, const std::string& folderPath, std::string& errorMessage);
 };
 

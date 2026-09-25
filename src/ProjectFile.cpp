@@ -106,13 +106,12 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
     }
     QJsonObject root = doc.object();
 
-    std::lock_guard<std::mutex> lock(project.mutex);
-    project.sampleRate = root["sampleRate"].toDouble(44100.0);
-    project.channels = root["channels"].toInt(2);
-    project.tracks.clear();
-    project.labels.clear();
-    project.selection.clear();
-    project.playheadFrame = 0;
+    // Parse everything into a scratch project first. A missing or unreadable
+    // clip used to abort half-way through, leaving `project` wiped (and the
+    // caller's undo history pointing at tracks that no longer existed).
+    Project loaded;
+    loaded.sampleRate = root["sampleRate"].toDouble(44100.0);
+    loaded.channels = root["channels"].toInt(2);
 
     for (const QJsonValue& trackValue : root["tracks"].toArray()) {
         QJsonObject trackObj = trackValue.toObject();
@@ -150,7 +149,7 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
         }
         std::sort(track.clips.begin(), track.clips.end(),
                   [](const Clip& a, const Clip& b) { return a.startFrame < b.startFrame; });
-        project.tracks.push_back(std::move(track));
+        loaded.tracks.push_back(std::move(track));
     }
 
     for (const QJsonValue& labelValue : root["labels"].toArray()) {
@@ -159,11 +158,24 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
         label.text = labelObj["text"].toString().toStdString();
         label.startFrame = labelObj["startFrame"].toString().toLongLong();
         label.endFrame = labelObj["endFrame"].toString().toLongLong();
-        project.labels.push_back(std::move(label));
+        loaded.labels.push_back(std::move(label));
     }
-    std::sort(project.labels.begin(), project.labels.end(),
+    std::sort(loaded.labels.begin(), loaded.labels.end(),
               [](const Label& a, const Label& b) { return a.startFrame < b.startFrame; });
 
+    // Everything parsed and every clip read: only now replace the target.
+    std::lock_guard<std::mutex> lock(project.mutex);
+    if (loaded.channels != project.channels) {
+        // The clipboard is interleaved at the old width; pasting it into a
+        // project with a different channel count would scramble it.
+        project.clipboard.clear();
+    }
+    project.sampleRate = loaded.sampleRate;
+    project.channels = loaded.channels;
+    project.tracks = std::move(loaded.tracks);
+    project.labels = std::move(loaded.labels);
+    project.selection.clear();
+    project.playheadFrame = 0;
     return true;
 }
 

@@ -18,6 +18,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chain, so gain, the compressor and the voice effects after it could push the
   signal straight past the ceiling (-1 dB limiter + 12 dB gain gave +6 dBFS).
   It now runs last, and its row sits at the bottom of the filter panel.
+- **A failed Open no longer wipes the current project.** If a clip file was
+  missing or unreadable, Open had already cleared the project before giving
+  up, and the undo history still pointed at the discarded tracks (the next
+  Undo read freed memory). Projects now load all-or-nothing: on failure
+  nothing changes; on success the undo history is cleared as before.
 
 ## [0.2.0]
 

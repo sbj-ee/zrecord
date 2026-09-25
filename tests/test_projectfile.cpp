@@ -51,6 +51,7 @@ private slots:
     void savedClipsAreFloatWav();
     void loadsLegacy24BitProjects();
     void integerExportClipsInsteadOfWrapping();
+    void failedLoadLeavesProjectUntouched();
 };
 
 void TestProjectFile::saveKeepsSamplesBeyondFullScale() {
@@ -137,6 +138,51 @@ void TestProjectFile::integerExportClipsInsteadOfWrapping() {
         QVERIFY2(std::fabs(back[i] - expected) < 1e-4f,
                  qPrintable(QString("%1 -> %2").arg(kLoudSamples[i]).arg(back[i])));
     }
+}
+
+void TestProjectFile::failedLoadLeavesProjectUntouched() {
+    // Regression: a clip that failed to read aborted load() after it had
+    // already cleared the target, so a failed Open wiped the open project.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("broken.zrproj");
+    {
+        Project other;
+        fill(other, {0.1f, 0.2f});
+        other.channels = 1;
+        other.sampleRate = 22050.0;
+        std::string error;
+        QVERIFY2(ProjectFile::save(other, path.toStdString(), error), error.c_str());
+    }
+    QVERIFY(QFile::remove(path + "/audio/track0_clip0.wav"));
+
+    Project project;
+    fill(project, {0.5f, -0.5f, 0.25f});
+    project.channels = 2;
+    project.sampleRate = 48000.0;
+    project.tracks.push_back(Track{});
+    project.labels.push_back(Label{10, 20, "keep"});
+    project.selection.trackIndex = 0;
+    project.selection.startFrame = 0;
+    project.selection.endFrame = 1;
+    project.playheadFrame = 7;
+    project.clipboard = {0.3f, 0.3f};
+
+    std::string error;
+    QVERIFY(!ProjectFile::load(project, path.toStdString(), error));
+    QVERIFY(!error.empty());
+
+    QCOMPARE(project.channels, 2);
+    QCOMPARE(project.sampleRate, 48000.0);
+    QCOMPARE(project.tracks.size(), size_t(2));
+    QCOMPARE(project.tracks[0].clips.size(), size_t(1));
+    QCOMPARE(project.tracks[0].clips[0].samples, (std::vector<float>{0.5f, -0.5f, 0.25f}));
+    QCOMPARE(project.labels.size(), size_t(1));
+    QCOMPARE(project.labels[0].text, std::string("keep"));
+    QCOMPARE(project.selection.trackIndex, 0);
+    QCOMPARE(project.selection.endFrame, int64_t(1));
+    QCOMPARE(project.playheadFrame, int64_t(7));
+    QCOMPARE(project.clipboard.size(), size_t(2));
 }
 
 QTEST_GUILESS_MAIN(TestProjectFile)

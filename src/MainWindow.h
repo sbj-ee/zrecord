@@ -68,6 +68,11 @@ public:
     void refreshActionStateForTest() { onSelectionChanged(); }
     void setControlsEnabledForTest(bool recording) { setControlsEnabled(recording); }
 
+    // Opens a .zrproj folder (what File > Open does after its dialog). On
+    // failure the current project and its undo history are left untouched
+    // and false is returned with the reason in `error`.
+    bool openProjectFolder(const QString& path, QString* error = nullptr);
+
 private:
     void buildUi();
     // Menus reuse the same QActions the toolbar shows, so the two can't drift

@@ -2,6 +2,7 @@
 
 #include "FakeAudioEngine.h"
 #include "MainWindow.h"
+#include "ProjectFile.h"
 #include "TrackPanel.h"
 
 using namespace zrecord;
@@ -41,6 +42,7 @@ private slots:
     void mainWindowEnablesEditActionsWithASelection();
     void mainWindowSelectAllNeedsContent();
     void mainWindowLocksEditingWhileRecording();
+    void mainWindowFailedOpenKeepsProjectAndUndo();
 
 private:
     Project project_;
@@ -263,6 +265,62 @@ void TestGui::mainWindowLocksEditingWhileRecording() {
 
     window.setControlsEnabledForTest(false);
     QVERIFY(actionEnabled(window, "Cut"));
+}
+
+void TestGui::mainWindowFailedOpenKeepsProjectAndUndo() {
+    // Regression: a failed Open cleared the project but kept the undo stack,
+    // so the next Undo indexed tracks that no longer existed.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString good = dir.filePath("good.zrproj");
+    const QString broken = dir.filePath("broken.zrproj");
+    {
+        Project saved;
+        saved.channels = 1;
+        Track a;
+        a.name = "A";
+        a.clips.push_back(makeClip(0, 500, 0.1f));
+        saved.tracks.push_back(a);
+        Track b;
+        b.name = "B";
+        saved.tracks.push_back(b);
+        std::string error;
+        QVERIFY2(ProjectFile::save(saved, good.toStdString(), error), error.c_str());
+        QVERIFY2(ProjectFile::save(saved, broken.toStdString(), error), error.c_str());
+        QVERIFY(QFile::remove(broken + "/audio/track0_clip0.wav"));
+    }
+
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    project->channels = 1;
+    Track track;
+    track.clips.push_back(makeClip(0, 40000));
+    project->tracks.push_back(std::move(track));
+    project->selection.trackIndex = 0;
+    project->selection.startFrame = 100;
+    project->selection.endFrame = 20000;
+    window.refreshActionStateForTest();
+
+    findAction(window, "Silence")->trigger();
+    QCOMPARE(project->tracks[0].clips[0].samples[1000], 0.0f);
+    QVERIFY(actionEnabled(window, "Undo"));
+
+    QString error;
+    QVERIFY(!window.openProjectFolder(broken, &error));
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(project->tracks.size(), size_t(1));
+    QCOMPARE(project->tracks[0].clips[0].samples.size(), size_t(40000));
+    QVERIFY(actionEnabled(window, "Undo"));
+
+    // Undo still refers to live data (ASan flags the old use-after-clear).
+    findAction(window, "Undo")->trigger();
+    QCOMPARE(project->tracks[0].clips[0].samples[1000], 0.5f);
+
+    findAction(window, "Redo")->trigger();
+    QVERIFY2(window.openProjectFolder(good, &error), qPrintable(error));
+    QCOMPARE(project->tracks.size(), size_t(2));
+    QCOMPARE(project->tracks[0].name, std::string("A"));
+    QVERIFY2(!actionEnabled(window, "Undo"), "Opening a project must clear the undo history");
 }
 
 QTEST_MAIN(TestGui)

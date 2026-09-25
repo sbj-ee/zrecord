@@ -802,15 +802,27 @@ void MainWindow::onOpenProject() {
     if (dirPath.isEmpty()) {
         return;
     }
-    std::string error;
-    if (!ProjectFile::load(project_, dirPath.toStdString(), error)) {
-        QMessageBox::warning(this, "Open failed", QString::fromStdString(error));
-        return;
+    QString error;
+    if (!openProjectFolder(dirPath, &error)) {
+        QMessageBox::warning(this, "Open failed", error);
+    }
+}
+
+bool MainWindow::openProjectFolder(const QString& path, QString* error) {
+    std::string message;
+    if (!ProjectFile::load(project_, path.toStdString(), message)) {
+        // load() is all-or-nothing, so the project -- and the undo commands
+        // that refer into it -- are still intact.
+        if (error != nullptr) {
+            *error = QString::fromStdString(message);
+        }
+        return false;
     }
     undoStack_->clear();
     trackPanel_->refresh();
     trackPanel_->zoomToFit();
     setControlsEnabled(false);
+    return true;
 }
 
 void MainWindow::onSaveProject() {
