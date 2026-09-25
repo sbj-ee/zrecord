@@ -28,6 +28,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leaking the device handles every time a project played to the end. It is
   now released as soon as playback finishes, and New/Open stop playback
   before replacing the project.
+- **Closing the window with undo history no longer touches freed memory.** The
+  undo stack was torn down after the window's other members, and its last
+  change notification ran against the half-destroyed window.
 
 ## [0.2.0]
 

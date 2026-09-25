@@ -13,3 +13,8 @@ add_executable(test_gui test_gui.cpp)
 target_link_libraries(test_gui PRIVATE zrecord_gui Qt6::Test)
 add_test(NAME test_gui COMMAND test_gui)
 set_tests_properties(test_gui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# In sanitizer builds, make UBSan findings fail the test instead of just
+# printing (ASan already aborts). Harmless in ordinary builds.
+get_property(zrecord_tests DIRECTORY PROPERTY TESTS)
+set_property(TEST ${zrecord_tests} APPEND PROPERTY ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")

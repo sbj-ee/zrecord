@@ -45,6 +45,7 @@ private slots:
     void mainWindowLocksEditingWhileRecording();
     void mainWindowFailedOpenKeepsProjectAndUndo();
     void mainWindowReleasesPlaybackThatEndsByItself();
+    void mainWindowClosesCleanlyWithUndoHistory();
 
 private:
     Project project_;
@@ -356,6 +357,28 @@ void TestGui::mainWindowReleasesPlaybackThatEndsByItself() {
     // Later ticks don't keep stopping an engine that's already idle.
     QTest::qWait(150);
     QCOMPARE(fake->stopPlaybackCalls(), 1);
+}
+
+void TestGui::mainWindowClosesCleanlyWithUndoHistory() {
+    // Regression: destroying the window with commands on the undo stack ran
+    // the stack's indexChanged handler on a half-destroyed MainWindow
+    // (UBSan: member access within an object of the wrong type; ASan could
+    // report a use-after-free). Needs a sanitizer build to fail loudly.
+    auto window = std::make_unique<MainWindow>(std::make_unique<FakeAudioEngine>());
+    Project* project = window->findChild<TrackPanel*>()->projectForTest();
+    Track track;
+    track.clips.push_back(makeClip(0, 4000));
+    project->tracks.push_back(std::move(track));
+    project->selection.trackIndex = 0;
+    project->selection.startFrame = 100;
+    project->selection.endFrame = 2000;
+    window->refreshActionStateForTest();
+    findAction(*window, "Silence")->trigger();
+    findAction(*window, "Fade In")->trigger();
+    findAction(*window, "Undo")->trigger(); // leave both undo and redo history
+    QVERIFY(actionEnabled(*window, "Undo"));
+    QVERIFY(actionEnabled(*window, "Redo"));
+    window.reset();
 }
 
 QTEST_MAIN(TestGui)

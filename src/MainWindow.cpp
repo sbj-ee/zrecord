@@ -68,7 +68,17 @@ MainWindow::MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* pa
     timer_->start(50);
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    // Child QObjects are deleted only after this class's members are gone.
+    // Left to that, the undo stack's destructor clears its commands and emits
+    // indexChanged into a lambda that touches trackPanel_ and project_, both
+    // already destroyed by then. Tear it down while everything is still alive.
+    timer_->stop();
+    undoStack_->disconnect(this);
+    delete undoStack_;
+    undoStack_ = nullptr;
+    engine_->stopPlayback();
+}
 
 void MainWindow::buildUi() {
     setWindowTitle("zrecord");
