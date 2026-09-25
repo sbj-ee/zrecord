@@ -749,14 +749,20 @@ void MainWindow::onTogglePlayback() {
     if (!engine_->isPlaying()) {
         std::string error;
         if (engine_->startPlayback(project_, error)) {
+            playbackActive_ = true;
             playButton_->setText("■  Stop");
         } else {
             QMessageBox::warning(this, "Playback failed", QString::fromStdString(error));
         }
     } else {
-        engine_->stopPlayback();
-        playButton_->setText("▶  Play");
+        stopPlaybackNow();
     }
+}
+
+void MainWindow::stopPlaybackNow() {
+    engine_->stopPlayback();
+    playbackActive_ = false;
+    playButton_->setText("▶  Play");
 }
 
 void MainWindow::onExport() {
@@ -791,6 +797,7 @@ void MainWindow::onNewProject() {
             return;
         }
     }
+    stopPlaybackNow();
     project_.reset();
     undoStack_->clear();
     trackPanel_->refresh();
@@ -809,6 +816,8 @@ void MainWindow::onOpenProject() {
 }
 
 bool MainWindow::openProjectFolder(const QString& path, QString* error) {
+    // The audio thread reads project_ while playing; don't swap it underneath.
+    stopPlaybackNow();
     std::string message;
     if (!ProjectFile::load(project_, path.toStdString(), message)) {
         // load() is all-or-nothing, so the project -- and the undo commands
@@ -1186,8 +1195,10 @@ void MainWindow::onTick() {
         }
     }
 
-    if (!engine_->isPlaying() && playButton_->text() != "▶  Play" && !engine_->isRecording()) {
-        playButton_->setText("▶  Play");
+    // Playback that reached the end on its own: release the finished stream
+    // (it used to stay open until the next Play overwrote and leaked it).
+    if (playbackActive_ && !engine_->isPlaying()) {
+        stopPlaybackNow();
     }
 }
 

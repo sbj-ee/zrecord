@@ -33,7 +33,10 @@ public:
         playing_ = true;
         return true;
     }
-    void stopPlayback() override { playing_ = false; }
+    void stopPlayback() override {
+        playing_ = false;
+        ++stopPlaybackCalls_;
+    }
     bool isPlaying() const override { return playing_; }
 
     void setFilterSettings(const FilterSettings& settings) override { settings_ = settings; }
@@ -47,10 +50,16 @@ public:
     // Lets a test hand a finished "take" to MainWindow when it stops.
     void setCapturedBuffer(std::vector<float> samples) { captured_ = std::move(samples); }
 
+    // Playback reaching the end by itself: the stream goes inactive without
+    // anyone calling stopPlayback().
+    void finishPlayback() { playing_ = false; }
+    int stopPlaybackCalls() const { return stopPlaybackCalls_; }
+
 private:
     bool recording_ = false;
     bool playing_ = false;
     bool muted_ = false;
+    int stopPlaybackCalls_ = 0;
     FilterSettings settings_;
     std::vector<float> captured_;
 };

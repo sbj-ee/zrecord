@@ -1,3 +1,4 @@
+#include <QPushButton>
 #include <QtTest>
 
 #include "FakeAudioEngine.h"
@@ -43,6 +44,7 @@ private slots:
     void mainWindowSelectAllNeedsContent();
     void mainWindowLocksEditingWhileRecording();
     void mainWindowFailedOpenKeepsProjectAndUndo();
+    void mainWindowReleasesPlaybackThatEndsByItself();
 
 private:
     Project project_;
@@ -321,6 +323,39 @@ void TestGui::mainWindowFailedOpenKeepsProjectAndUndo() {
     QCOMPARE(project->tracks.size(), size_t(2));
     QCOMPARE(project->tracks[0].name, std::string("A"));
     QVERIFY2(!actionEnabled(window, "Undo"), "Opening a project must clear the undo history");
+}
+
+void TestGui::mainWindowReleasesPlaybackThatEndsByItself() {
+    // Regression: when playback ran to the end on its own, onTick only reset
+    // the button text and never called stopPlayback(), so the finished
+    // PortAudio stream stayed open until the next Play leaked it.
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    Track track;
+    track.clips.push_back(makeClip(0, 1000));
+    project->tracks.push_back(std::move(track));
+
+    QPushButton* play = nullptr;
+    for (QPushButton* button : window.findChildren<QPushButton*>()) {
+        if (button->text() == "▶  Play") {
+            play = button;
+        }
+    }
+    QVERIFY(play != nullptr);
+
+    play->click();
+    QVERIFY(fake->isPlaying());
+    QCOMPARE(play->text(), QString("■  Stop"));
+
+    fake->finishPlayback();
+    QTRY_COMPARE(fake->stopPlaybackCalls(), 1); // released by the tick timer
+    QCOMPARE(play->text(), QString("▶  Play"));
+
+    // Later ticks don't keep stopping an engine that's already idle.
+    QTest::qWait(150);
+    QCOMPARE(fake->stopPlaybackCalls(), 1);
 }
 
 QTEST_MAIN(TestGui)

@@ -23,6 +23,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   up, and the undo history still pointed at the discarded tracks (the next
   Undo read freed memory). Projects now load all-or-nothing: on failure
   nothing changes; on success the undo history is cleared as before.
+- **Playback that ends by itself no longer leaks the audio stream.** The
+  finished PortAudio stream was never closed, and the next Play overwrote it,
+  leaking the device handles every time a project played to the end. It is
+  now released as soon as playback finishes, and New/Open stop playback
+  before replacing the project.
 
 ## [0.2.0]
 

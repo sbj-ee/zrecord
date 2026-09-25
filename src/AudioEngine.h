@@ -43,6 +43,11 @@ public:
 
     // Plays back `project` from its current playheadFrame. `project` must
     // outlive the AudioEngine or until stopPlayback() is called.
+    //
+    // When playback runs to the end on its own, isPlaying() turns false but
+    // the stream stays open until stopPlayback() (or the next startPlayback())
+    // releases it. The playhead is written back only when playback was
+    // stopped early; after a natural end it stays where playback started.
     bool startPlayback(Project& project, std::string& errorMessage) override;
     void stopPlayback() override;
     bool isPlaying() const override;
@@ -104,6 +109,7 @@ private:
 
     Project* playbackProject_ = nullptr;
     size_t playbackPos_ = 0;
+    std::atomic<bool> playbackFinished_{false}; // set by the audio thread at the end
 
     std::atomic<float> peakLevel_{0.0f};
     std::atomic<bool> recording_{false};

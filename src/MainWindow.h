@@ -84,11 +84,17 @@ private:
     void queryInitialMicVolume();
     int findArmedTrackIndex() const;
     bool projectHasAnyContent() const;
+    // Stops playback (if any) and resets the Play button; used before the
+    // project it reads from is replaced.
+    void stopPlaybackNow();
 
     Project project_;
     std::unique_ptr<AudioEngineInterface> engine_;
     QUndoStack* undoStack_ = nullptr;
     int recordingArmedTrackIndex_ = -1;
+    // True from a successful startPlayback() until the stream is released,
+    // including after it ends by itself (onTick releases it then).
+    bool playbackActive_ = false;
 
     QComboBox* deviceCombo_ = nullptr;
     QComboBox* channelsCombo_ = nullptr;

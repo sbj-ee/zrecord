@@ -121,13 +121,14 @@ bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
         errorMessage = "Already playing";
         return false;
     }
+    // A previous playback that ran to the end is inactive but its stream is
+    // still open; release it rather than overwriting (and leaking) it.
+    stopPlayback();
+
     if (project.lengthFrames() <= 0) {
         errorMessage = "Nothing to play";
         return false;
     }
-
-    playbackProject_ = &project;
-    playbackPos_ = static_cast<size_t>(std::max<int64_t>(0, project.playheadFrame));
 
     PaStreamParameters outputParams{};
     outputParams.device = Pa_GetDefaultOutputDevice();
@@ -135,6 +136,11 @@ bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
         errorMessage = "No default output device available";
         return false;
     }
+
+    // Set only once nothing can bail out without clearing it again.
+    playbackProject_ = &project;
+    playbackPos_ = static_cast<size_t>(std::max<int64_t>(0, project.playheadFrame));
+    playbackFinished_.store(false);
     outputParams.channelCount = project.channels;
     outputParams.sampleFormat = paFloat32;
     const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(outputParams.device);
@@ -168,10 +174,10 @@ void AudioEngine::stopPlayback() {
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
     }
-    if (playbackProject_ != nullptr) {
+    if (playbackProject_ != nullptr && !playbackFinished_.load()) {
         playbackProject_->playheadFrame = static_cast<int64_t>(playbackPos_);
-        playbackProject_ = nullptr;
     }
+    playbackProject_ = nullptr;
 }
 
 bool AudioEngine::isPlaying() const {
@@ -294,6 +300,7 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
 int AudioEngine::handleOutput(float* output, unsigned long frameCount) {
     if (playbackProject_ == nullptr) {
         std::fill(output, output + frameCount * static_cast<unsigned long>(channels_), 0.0f);
+        playbackFinished_.store(true);
         return paComplete;
     }
 
@@ -307,7 +314,11 @@ int AudioEngine::handleOutput(float* output, unsigned long frameCount) {
 
     playbackPos_ += frameCount;
     bool reachedEnd = static_cast<int64_t>(playbackPos_) >= project.lengthFrames();
-    return reachedEnd ? paComplete : paContinue;
+    if (reachedEnd) {
+        playbackFinished_.store(true);
+        return paComplete;
+    }
+    return paContinue;
 }
 
 } // namespace zrecord
