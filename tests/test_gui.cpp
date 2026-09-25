@@ -46,6 +46,8 @@ private slots:
     void mainWindowFailedOpenKeepsProjectAndUndo();
     void mainWindowReleasesPlaybackThatEndsByItself();
     void mainWindowClosesCleanlyWithUndoHistory();
+    void spectrogramRepaintsReuseCachedTiles();
+    void mainWindowRefreshesPlaybackWhilePlaying();
 
 private:
     Project project_;
@@ -379,6 +381,46 @@ void TestGui::mainWindowClosesCleanlyWithUndoHistory() {
     QVERIFY(actionEnabled(*window, "Undo"));
     QVERIFY(actionEnabled(*window, "Redo"));
     window.reset();
+}
+
+void TestGui::spectrogramRepaintsReuseCachedTiles() {
+    // Regression: every spectrogram repaint recomputed one FFT per column
+    // (~390 ms for a 1600 px panel), all under the project lock.
+    for (auto& track : project_.tracks) {
+        track.display = TrackDisplay::Spectrogram;
+    }
+    panel_.update();
+    panel_.grab();
+    const int firstPaint = panel_.spectrogramTilesRenderedForTest();
+    QVERIFY(firstPaint > 0);
+
+    panel_.grab();
+    QCOMPARE(panel_.spectrogramTilesRenderedForTest(), firstPaint); // all cached
+
+    // An edit changes the clip's content, so its tiles are recomputed.
+    Project::silenceRange(project_.tracks[0], 0, 1000, 1);
+    panel_.grab();
+    QVERIFY(panel_.spectrogramTilesRenderedForTest() > firstPaint);
+}
+
+void TestGui::mainWindowRefreshesPlaybackWhilePlaying() {
+    // Playback plays a snapshot; the tick must keep handing it fresh ones so
+    // edits made while playing are heard.
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    Track track;
+    track.clips.push_back(makeClip(0, 1000));
+    project->tracks.push_back(std::move(track));
+
+    findAction(window, "Play / Stop")->trigger();
+    QVERIFY(fake->isPlaying());
+    QTRY_VERIFY(fake->refreshCalls() >= 2);
+    findAction(window, "Play / Stop")->trigger();
+    const int afterStop = fake->refreshCalls();
+    QTest::qWait(150);
+    QCOMPARE(fake->refreshCalls(), afterStop);
 }
 
 QTEST_MAIN(TestGui)

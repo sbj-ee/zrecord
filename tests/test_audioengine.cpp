@@ -49,6 +49,7 @@ private slots:
     void initTestCase();
     void naturalEndDoesNotLeakTheStream();
     void naturalEndReleasesTheProject();
+    void playbackRunsWhileTheUiHoldsTheProjectMutex();
 
 private:
     QTemporaryDir home_;
@@ -103,6 +104,25 @@ void TestAudioEngine::naturalEndReleasesTheProject() {
     }
     engine_->stopPlayback(); // ASan: no write into the freed project
     QVERIFY(!engine_->isPlaying());
+}
+
+void TestAudioEngine::playbackRunsWhileTheUiHoldsTheProjectMutex() {
+    // Regression: the output callback blocked on project.mutex, so anything
+    // holding it on the UI thread (a spectrogram repaint took ~390 ms) stalled
+    // playback. Playback now renders from a snapshot and must run to the end
+    // with the mutex held throughout.
+    Project project;
+    fill(project, 4410); // 100 ms
+    std::string error;
+    if (!engine_->startPlayback(project, error)) {
+        QSKIP(qPrintable(QString("no usable output device: %1").arg(QString::fromStdString(error))));
+    }
+    {
+        std::lock_guard<std::mutex> uiHoldsIt(project.mutex);
+        QVERIFY2(waitUntilIdle(*engine_, 3000), "playback stalled while the project mutex was held");
+    }
+    QVERIFY(engine_->playbackFrame() >= 4410);
+    engine_->stopPlayback();
 }
 
 QTEST_GUILESS_MAIN(TestAudioEngine)

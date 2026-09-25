@@ -40,6 +40,11 @@ public:
     virtual bool startPlayback(Project& project, std::string& errorMessage) = 0;
     virtual void stopPlayback() = 0;
     virtual bool isPlaying() const = 0;
+    // Hands playback a fresh copy of the project, so edits made while playing
+    // are heard. Cheap; called from the UI tick while playing.
+    virtual void refreshPlayback() = 0;
+    // The frame playback has reached (valid while playing and just after).
+    virtual int64_t playbackFrame() const = 0;
 
     virtual void setFilterSettings(const FilterSettings& settings) = 0;
 

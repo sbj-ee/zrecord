@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QCache>
+#include <QImage>
 #include <QWidget>
 #include <deque>
 #include <vector>
@@ -40,6 +42,8 @@ public:
     // The panel doesn't own the project; a test needs the same pointer to set
     // up state that MainWindow will then react to.
     Project* projectForTest() const { return project_; }
+    // How many spectrogram tiles have been computed so far (cache misses).
+    int spectrogramTilesRenderedForTest() const { return spectrogramTilesRendered_; }
 
     void setSnapEnabled(bool enabled);
     bool snapEnabled() const { return snapEnabled_; }
@@ -220,6 +224,15 @@ private:
     // 512 samples is a deliberate compromise: enough frequency resolution to
     // read as a spectrogram, small enough that a full-width repaint stays
     // interactive when every column needs its own transform.
+    // Spectrogram columns are rendered in tiles of kSpectrogramTileWidth px and
+    // cached by content (clip content ids and positions), zoom and height, so
+    // a repaint only computes FFTs for tiles it has never seen.
+    static constexpr int kSpectrogramTileWidth = 128;
+    QImage renderSpectrogramTile(const Track& track, const std::vector<const Clip*>& lifted, int64_t tileIndex,
+                                 int height) const;
+    QCache<quint64, QImage> spectrogramTiles_{48 * 1024}; // cost in KiB: ~48 MiB
+    int spectrogramTilesRendered_ = 0;
+
     static constexpr int kFftSize = 512;
     static constexpr float kSpectrogramFloorDb = -84.0f;
 };

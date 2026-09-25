@@ -140,7 +140,10 @@ bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
     // Set only once nothing can bail out without clearing it again.
     playbackProject_ = &project;
     playbackPos_ = static_cast<size_t>(std::max<int64_t>(0, project.playheadFrame));
+    playbackFrame_.store(static_cast<int64_t>(playbackPos_));
+    playbackChannels_ = project.channels;
     playbackFinished_.store(false);
+    mixer_.publish(PlaybackSnapshot::capture(project));
     outputParams.channelCount = project.channels;
     outputParams.sampleFormat = paFloat32;
     const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(outputParams.device);
@@ -154,6 +157,7 @@ bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
         errorMessage = Pa_GetErrorText(err);
         outputStream_ = nullptr;
         playbackProject_ = nullptr;
+        mixer_.clear();
         return false;
     }
 
@@ -163,6 +167,7 @@ bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
         playbackProject_ = nullptr;
+        mixer_.clear();
         return false;
     }
     return true;
@@ -178,6 +183,14 @@ void AudioEngine::stopPlayback() {
         playbackProject_->playheadFrame = static_cast<int64_t>(playbackPos_);
     }
     playbackProject_ = nullptr;
+    mixer_.clear(); // the stream is closed, so the callback can't be running
+}
+
+void AudioEngine::refreshPlayback() {
+    if (playbackProject_ == nullptr || outputStream_ == nullptr) {
+        return;
+    }
+    mixer_.publish(PlaybackSnapshot::capture(*playbackProject_));
 }
 
 bool AudioEngine::isPlaying() const {
@@ -298,23 +311,12 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
 }
 
 int AudioEngine::handleOutput(float* output, unsigned long frameCount) {
-    if (playbackProject_ == nullptr) {
-        std::fill(output, output + frameCount * static_cast<unsigned long>(channels_), 0.0f);
-        playbackFinished_.store(true);
-        return paComplete;
-    }
-
-    Project& project = *playbackProject_;
-    std::vector<float> mix(static_cast<size_t>(frameCount) * static_cast<size_t>(project.channels), 0.0f);
-    {
-        std::lock_guard<std::mutex> lock(project.mutex);
-        project.readMix(static_cast<int64_t>(playbackPos_), static_cast<int64_t>(frameCount), mix);
-    }
-    std::copy(mix.begin(), mix.end(), output);
-
+    // Real-time path: no lock, no allocation. The mixer renders straight into
+    // PortAudio's buffer from the current snapshot.
+    bool more = mixer_.render(static_cast<int64_t>(playbackPos_), output, frameCount, playbackChannels_);
     playbackPos_ += frameCount;
-    bool reachedEnd = static_cast<int64_t>(playbackPos_) >= project.lengthFrames();
-    if (reachedEnd) {
+    playbackFrame_.store(static_cast<int64_t>(playbackPos_), std::memory_order_relaxed);
+    if (!more) {
         playbackFinished_.store(true);
         return paComplete;
     }

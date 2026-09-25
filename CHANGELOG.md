@@ -37,6 +37,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chunks: undo snapshots copy only clip headers and an edit copies only the
   chunks it touches (~1 MB per small edit; the 10-minute take itself now
   costs 238 MB instead of 675 MB).
+- **Playback no longer stutters while the timeline repaints.** The playback
+  callback waited on the same lock the timeline held for its whole repaint
+  (~450 ms for a spectrogram), and allocated on every callback. Playback now
+  renders lock- and allocation-free from a snapshot of the project that is
+  refreshed every tick, and spectrogram tiles are cached, so a repeat
+  spectrogram repaint takes ~1.4 ms instead of ~430 ms.
 
 ## [0.2.0]
 

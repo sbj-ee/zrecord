@@ -38,6 +38,10 @@ public:
         ++stopPlaybackCalls_;
     }
     bool isPlaying() const override { return playing_; }
+    void refreshPlayback() override { ++refreshCalls_; }
+    int64_t playbackFrame() const override { return playbackFrame_; }
+    void setPlaybackFrame(int64_t frame) { playbackFrame_ = frame; }
+    int refreshCalls() const { return refreshCalls_; }
 
     void setFilterSettings(const FilterSettings& settings) override { settings_ = settings; }
     FilterSettings settings() const { return settings_; }
@@ -60,6 +64,8 @@ private:
     bool playing_ = false;
     bool muted_ = false;
     int stopPlaybackCalls_ = 0;
+    int refreshCalls_ = 0;
+    int64_t playbackFrame_ = 0;
     FilterSettings settings_;
     std::vector<float> captured_;
 };

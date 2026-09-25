@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 #include <memory>
 #include <vector>
@@ -54,6 +55,10 @@ public:
     // Replace the contents (convenience for tests and builders).
     void assign(size_t count, float value) { *this = SampleBuffer(count, value); }
 
+    // Identifies this exact content: copies share it, and every write, slice
+    // or new buffer gets a fresh one (never reused), so caches can key on it.
+    uint64_t contentId() const { return id_; }
+
     // True when both refer to the very same chunk list (a cheap copy).
     bool sharesStorageWith(const SampleBuffer& other) const {
         return chunks_ != nullptr && chunks_ == other.chunks_;
@@ -75,6 +80,9 @@ private:
     std::shared_ptr<const ChunkList> chunks_;
     size_t offset_ = 0;
     size_t size_ = 0;
+    uint64_t id_ = 0; // 0 = empty
+
+    static uint64_t nextId();
 
     template <typename Fn>
     void mutateRange(size_t start, size_t count, Fn&& fn);

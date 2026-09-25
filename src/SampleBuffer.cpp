@@ -1,6 +1,7 @@
 #include "SampleBuffer.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 namespace zrecord {
@@ -8,6 +9,11 @@ namespace zrecord {
 namespace {
 constexpr size_t kMask = SampleBuffer::kChunkSize - 1;
 } // namespace
+
+uint64_t SampleBuffer::nextId() {
+    static std::atomic<uint64_t> counter{0};
+    return ++counter;
+}
 
 SampleBuffer::SampleBuffer(const std::vector<float>& samples) {
     if (samples.empty()) {
@@ -22,6 +28,7 @@ SampleBuffer::SampleBuffer(const std::vector<float>& samples) {
     }
     chunks_ = std::move(list);
     size_ = samples.size();
+    id_ = nextId();
 }
 
 SampleBuffer::SampleBuffer(std::initializer_list<float> samples)
@@ -37,6 +44,7 @@ SampleBuffer::SampleBuffer(size_t count, float value) {
     }
     chunks_ = std::move(list);
     size_ = count;
+    id_ = nextId();
 }
 
 void SampleBuffer::copyTo(size_t start, size_t count, float* dst) const {
@@ -80,6 +88,7 @@ SampleBuffer SampleBuffer::slice(size_t start, size_t count) const {
     }
     out.offset_ = firstGlobal & kMask;
     out.size_ = count;
+    out.id_ = (out.chunks_ == chunks_ && out.offset_ == offset_ && count == size_) ? id_ : nextId();
     return out;
 }
 
@@ -103,6 +112,7 @@ void SampleBuffer::mutateRange(size_t start, size_t count, Fn&& fn) {
         done += n;
     }
     chunks_ = std::move(list);
+    id_ = nextId();
 }
 
 void SampleBuffer::write(size_t start, const float* src, size_t count) {

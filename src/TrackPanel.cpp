@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace zrecord {
@@ -559,7 +560,7 @@ void TrackPanel::drawEnvelope(QPainter& painter, const Track& track, int laneTop
 void TrackPanel::drawLaneSpectrogram(QPainter& painter, const Track& track, int laneTop, int w,
                                       int trackIndex) {
     const int usableHeight = kLaneHeight - 2;
-    if (usableHeight <= 0 || project_ == nullptr) {
+    if (usableHeight <= 0 || project_ == nullptr || framesPerPixel_ <= 0.0) {
         return;
     }
 
@@ -572,12 +573,65 @@ void TrackPanel::drawLaneSpectrogram(QPainter& painter, const Track& track, int 
         }
     }
 
+    // What the lane's audio is: every visible clip's content id, position and
+    // width. Any edit changes a content id or position, so stale tiles are
+    // simply never looked up again (and age out of the cache).
+    quint64 signature = 1469598103934665603ULL;
+    auto mix = [&signature](quint64 value) {
+        signature ^= value + 0x9e3779b97f4a7c15ULL + (signature << 6) + (signature >> 2);
+    };
+    for (const auto& clip : track.clips) {
+        if (std::find(lifted.begin(), lifted.end(), &clip) != lifted.end()) {
+            continue;
+        }
+        mix(clip.samples.contentId());
+        mix(static_cast<quint64>(clip.startFrame));
+        mix(static_cast<quint64>(clip.channels));
+    }
+    quint64 zoomBits = 0;
+    static_assert(sizeof(zoomBits) == sizeof(framesPerPixel_));
+    std::memcpy(&zoomBits, &framesPerPixel_, sizeof(zoomBits));
+    mix(zoomBits);
+    mix(static_cast<quint64>(usableHeight));
+
+    // Column k shows the FFT window starting at frame k * framesPerPixel_, so
+    // columns (and tiles) stay put as the view scrolls.
+    const int64_t firstColumn = static_cast<int64_t>(std::floor(viewStartFrame_ / framesPerPixel_));
+    const int64_t lastColumn = firstColumn + (w - kHeaderWidth);
+    painter.save();
+    painter.setClipRect(kHeaderWidth, laneTop, w - kHeaderWidth, kLaneHeight);
+    for (int64_t tile = firstColumn / kSpectrogramTileWidth; tile * kSpectrogramTileWidth <= lastColumn; ++tile) {
+        quint64 key = signature;
+        key ^= static_cast<quint64>(tile) * 0xff51afd7ed558ccdULL;
+        key = (key ^ (key >> 33)) * 0xc4ceb9fe1a85ec53ULL;
+        QImage* image = spectrogramTiles_.object(key);
+        if (image == nullptr) {
+            image = new QImage(renderSpectrogramTile(track, lifted, tile, usableHeight));
+            ++spectrogramTilesRendered_;
+            spectrogramTiles_.insert(key, image, std::max<qsizetype>(1, image->sizeInBytes() / 1024));
+            image = spectrogramTiles_.object(key);
+            if (image == nullptr) {
+                continue;
+            }
+        }
+        int x = kHeaderWidth + static_cast<int>(tile * kSpectrogramTileWidth - firstColumn);
+        painter.drawImage(x, laneTop + 1, *image);
+    }
+    painter.restore();
+}
+
+QImage TrackPanel::renderSpectrogramTile(const Track& track, const std::vector<const Clip*>& lifted,
+                                         int64_t tileIndex, int height) const {
+    QImage image(kSpectrogramTileWidth, height, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+
     std::vector<float> mono(kFftSize);
-    for (int x = kHeaderWidth; x < w; ++x) {
+    for (int col = 0; col < kSpectrogramTileWidth; ++col) {
         // Each column reads one FFT window starting at that column's frame, so
         // the window is fixed in samples while the step between columns tracks
         // the zoom level.
-        int64_t frameStart = frameAtX(x);
+        const int64_t frameStart =
+            static_cast<int64_t>(static_cast<double>(tileIndex * kSpectrogramTileWidth + col) * framesPerPixel_);
 
         bool anyAudio = false;
         std::fill(mono.begin(), mono.end(), 0.0f);
@@ -614,9 +668,8 @@ void TrackPanel::drawLaneSpectrogram(QPainter& painter, const Track& track, int 
         }
 
         // Low frequencies at the bottom, as every other spectrogram draws them.
-        for (int y = 0; y < usableHeight; ++y) {
-            size_t bin = static_cast<size_t>(static_cast<double>(usableHeight - 1 - y) /
-                                              usableHeight * (bins.size() - 1));
+        for (int y = 0; y < height; ++y) {
+            size_t bin = static_cast<size_t>(static_cast<double>(height - 1 - y) / height * (bins.size() - 1));
             float db = bins[bin];
             float t = (db - kSpectrogramFloorDb) / (0.0f - kSpectrogramFloorDb);
             t = std::clamp(t, 0.0f, 1.0f);
@@ -625,10 +678,10 @@ void TrackPanel::drawLaneSpectrogram(QPainter& painter, const Track& track, int 
             int r = static_cast<int>(std::clamp(255.0f * (t < 0.5f ? 0.0f : (t - 0.5f) * 2.0f), 0.0f, 255.0f));
             int g = static_cast<int>(std::clamp(255.0f * std::min(1.0f, t * 1.6f), 0.0f, 255.0f));
             int b = static_cast<int>(std::clamp(255.0f * (t < 0.5f ? (0.3f + t) : (1.0f - t) * 0.6f), 0.0f, 255.0f));
-            painter.setPen(QColor(r, g, b));
-            painter.drawPoint(x, laneTop + 1 + y);
+            image.setPixel(col, y, qRgb(r, g, b));
         }
     }
+    return image;
 }
 
 void TrackPanel::drawLaneWaveform(QPainter& painter, const Track& track, int laneTop, int w,
@@ -792,7 +845,9 @@ void TrackPanel::paintEvent(QPaintEvent*) {
 
     if (project_ == nullptr) return;
 
-    std::lock_guard<std::mutex> lock(project_->mutex);
+    // No project lock: only the UI thread mutates the project, and playback
+    // renders from its own snapshot (PlaybackMixer), so painting -- however
+    // slow -- can't stall the audio callback.
 
     for (size_t i = 0; i < project_->tracks.size(); ++i) {
         const Track& track = project_->tracks[i];

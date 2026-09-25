@@ -124,9 +124,10 @@ struct Selection {
 };
 
 // The full editable document: a set of tracks sharing one sample rate and
-// channel count, a selection, and a playhead. `mutex` guards `tracks` since
-// it is read from the PortAudio playback callback thread while being
-// mutated from the UI thread by undo commands.
+// channel count, a selection, and a playhead. All mutation happens on the UI
+// thread. Playback never reads the Project from the audio callback: it plays
+// a PlaybackSnapshot taken under `mutex`, which mutations also hold, so a
+// snapshot always sees a consistent set of tracks.
 class Project {
 public:
     mutable std::mutex mutex;
@@ -193,6 +194,12 @@ public:
     // into `out`, which must already be sized frameCount*channels and will
     // be overwritten (not accumulated into). Caller must hold `mutex`.
     void readMix(int64_t startFrame, int64_t frameCount, std::vector<float>& out) const;
+
+    // The mixing behind readMix, over any set of tracks: writes
+    // frameCount*channels samples to `out`. Allocation- and lock-free, so the
+    // playback callback can call it on a snapshot.
+    static void mixTracks(const std::vector<Track>& tracks, int channels, int64_t startFrame,
+                          int64_t frameCount, float* out);
 
     // Renders the whole project to one interleaved buffer, for export.
     std::vector<float> renderMixdown() const;

@@ -334,6 +334,17 @@ void Project::readMix(int64_t startFrame, int64_t frameCount, std::vector<float>
     if (channels <= 0 || frameCount <= 0) {
         return;
     }
+    frameCount = std::min<int64_t>(frameCount, static_cast<int64_t>(out.size() / static_cast<size_t>(channels)));
+    mixTracks(tracks, channels, startFrame, frameCount, out.data());
+}
+
+void Project::mixTracks(const std::vector<Track>& tracks, int channels, int64_t startFrame,
+                        int64_t frameCount, float* out) {
+    if (channels <= 0 || frameCount <= 0) {
+        return;
+    }
+    const size_t outSize = static_cast<size_t>(frameCount) * static_cast<size_t>(channels);
+    std::fill(out, out + outSize, 0.0f);
 
     bool anySolo = std::any_of(tracks.begin(), tracks.end(), [](const Track& t) { return t.soloed; });
 
@@ -362,7 +373,7 @@ void Project::readMix(int64_t startFrame, int64_t frameCount, std::vector<float>
                 for (int c = 0; c < channels; ++c) {
                     size_t srcIndex = static_cast<size_t>(clipLocalStart + f) * channels + c;
                     size_t dstIndex = static_cast<size_t>(outLocalStart + f) * channels + c;
-                    if (srcIndex < clip.samples.size() && dstIndex < out.size()) {
+                    if (srcIndex < clip.samples.size() && dstIndex < outSize) {
                         out[dstIndex] += clip.samples[srcIndex] * frameGain;
                     }
                 }
@@ -370,8 +381,8 @@ void Project::readMix(int64_t startFrame, int64_t frameCount, std::vector<float>
         }
     }
 
-    for (float& sample : out) {
-        sample = std::clamp(sample, -1.0f, 1.0f);
+    for (size_t i = 0; i < outSize; ++i) {
+        out[i] = std::clamp(out[i], -1.0f, 1.0f);
     }
 }
 

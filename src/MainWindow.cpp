@@ -1209,6 +1209,9 @@ void MainWindow::onTick() {
     // (it used to stay open until the next Play overwrote and leaked it).
     if (playbackActive_ && !engine_->isPlaying()) {
         stopPlaybackNow();
+    } else if (playbackActive_) {
+        // Let playback hear edits made since the last tick.
+        engine_->refreshPlayback();
     }
 }
 

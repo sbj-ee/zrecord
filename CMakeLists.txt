@@ -27,6 +27,7 @@ add_library(zrecord_core STATIC
     src/Commands.cpp
     src/ProjectFile.cpp
     src/SampleBuffer.cpp
+    src/PlaybackMixer.cpp
 )
 
 target_include_directories(zrecord_core PUBLIC src)
