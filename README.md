@@ -70,6 +70,12 @@ This installs the `zrecord` binary to `/usr/bin` and a desktop entry to `/usr/sh
 
 See [CHANGELOG.md](CHANGELOG.md) for what changed between releases.
 
+## License
+
+zrecord is released under the [MIT License](LICENSE). Copyright (c) 2026 Stephen B. Johnson.
+
+The .deb links dynamically against the system's libraries, each under its own license (shipped in its own package): Qt 6 (LGPL-3.0), PortAudio (MIT-style), libsndfile (LGPL-2.1-or-later) and libsamplerate (BSD-2-Clause). Nothing third-party is bundled or statically linked; the FFT and the voice changer DSP are zrecord's own code. If you redistribute zrecord with Qt or libsndfile bundled or linked statically (e.g. an AppImage), you must then meet their LGPL terms.
+
 ## Notes
 
 - If recording or playback seems stalled or silent, check your system's mic input volume/mute state (e.g. via `wpctl status` or your desktop's sound settings) before assuming it's an app bug.
