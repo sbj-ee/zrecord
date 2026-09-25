@@ -78,6 +78,7 @@ public:
     bool capturedOverrun() const;
 
 private:
+    std::string initError_; // set when Pa_Initialize failed
     static int inputCallbackStatic(const void* input, void* output, unsigned long frameCount,
                                     const PaStreamCallbackTimeInfo* timeInfo,
                                     unsigned long statusFlags, void* userData);

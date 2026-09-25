@@ -6,10 +6,18 @@
 namespace zrecord {
 
 AudioEngine::AudioEngine() {
-    Pa_Initialize();
+    // A failure here used to go unnoticed and surface later as empty device
+    // lists and puzzling errors; keep it and report it where it matters.
+    PaError err = Pa_Initialize();
+    if (err != paNoError) {
+        initError_ = std::string("The audio system failed to start: ") + Pa_GetErrorText(err);
+    }
 }
 
 AudioEngine::~AudioEngine() {
+    if (!initError_.empty()) {
+        return; // nothing was started, and Pa_Terminate must match a successful Pa_Initialize
+    }
     stopRecording();
     stopPlayback();
     Pa_Terminate();
@@ -17,6 +25,9 @@ AudioEngine::~AudioEngine() {
 
 std::vector<AudioDeviceInfo> AudioEngine::listInputDevices() const {
     std::vector<DeviceInfo> devices;
+    if (!initError_.empty()) {
+        return devices;
+    }
     int count = Pa_GetDeviceCount();
     for (int i = 0; i < count; ++i) {
         const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
@@ -37,6 +48,10 @@ int AudioEngine::defaultInputDeviceIndex() const {
 }
 
 bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRate, std::string& errorMessage) {
+    if (!initError_.empty()) {
+        errorMessage = initError_;
+        return false;
+    }
     if (recording_.load()) {
         errorMessage = "Already recording";
         return false;
@@ -117,6 +132,10 @@ bool AudioEngine::isInputMuted() const {
 }
 
 bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
+    if (!initError_.empty()) {
+        errorMessage = initError_;
+        return false;
+    }
     if (isPlaying()) {
         errorMessage = "Already playing";
         return false;
