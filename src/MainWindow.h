@@ -125,6 +125,7 @@ private:
     int recordingArmedTrackIndex_ = -1;
     // True from a successful startPlayback() until the stream is released,
     // including after it ends by itself (onTick releases it then).
+    int64_t playbackStartFrame_ = 0; // where the playhead returns when playback runs out
     bool playbackActive_ = false;
     int recordingChannels_ = 2; // channels the current take is captured with
     QString projectPath_;          // last saved/opened .zrproj, if any

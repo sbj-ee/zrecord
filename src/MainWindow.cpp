@@ -800,6 +800,7 @@ void MainWindow::onToggleRecord() {
 void MainWindow::onTogglePlayback() {
     if (!engine_->isPlaying()) {
         std::string error;
+        playbackStartFrame_ = project_.playheadFrame;
         if (engine_->startPlayback(project_, error)) {
             playbackActive_ = true;
             playButton_->setText("■  Stop");
@@ -1355,11 +1356,18 @@ void MainWindow::onTick() {
 
     // Playback that reached the end on its own: release the finished stream
     // (it used to stay open until the next Play overwrote and leaked it).
+    // Played to the end, the playhead goes back to where playback started,
+    // ready to play the same passage again.
     if (playbackActive_ && !engine_->isPlaying()) {
         stopPlaybackNow();
+        project_.playheadFrame = playbackStartFrame_;
+        trackPanel_->update();
     } else if (playbackActive_) {
         // Let playback hear edits made since the last tick.
         engine_->refreshPlayback();
+        // The playhead follows what's being heard.
+        project_.playheadFrame = engine_->playbackFrame();
+        trackPanel_->update();
     }
 }
 

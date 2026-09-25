@@ -57,6 +57,7 @@ private slots:
     void envelopeDragIsOneUndoableStep();
     void mainWindowAsksBeforeDiscardingUnsavedChanges();
     void mainWindowRecordsWithTheDevicesChannelCount();
+    void playheadFollowsPlayback();
 
 private:
     Project project_;
@@ -620,6 +621,36 @@ void TestGui::mainWindowRecordsWithTheDevicesChannelCount() {
     const Clip& take = project->tracks[0].clips[1];
     QCOMPARE(take.channels, 2);
     QCOMPARE(take.samples.toVector(), (std::vector<float>{0.25f, 0.25f, -0.5f, -0.5f, 0.75f, 0.75f}));
+}
+
+void TestGui::playheadFollowsPlayback() {
+    // Regression: the playhead stood still during playback (paint only ever
+    // drew project_.playheadFrame, which nothing updated while playing).
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    Track track;
+    Clip clip;
+    clip.channels = 2;
+    clip.samples = SampleBuffer(size_t(2 * 96000), 0.1f);
+    track.clips.push_back(clip);
+    project->tracks.push_back(std::move(track));
+    project->playheadFrame = 1000;
+
+    QPushButton* play = findButton(window, "▶  Play");
+    QVERIFY(play != nullptr);
+    play->click();
+    QVERIFY(fake->isPlaying());
+    fake->setPlaybackFrame(24000);
+    QTRY_COMPARE(project->playheadFrame, int64_t(24000));
+    fake->setPlaybackFrame(30000);
+    QTRY_COMPARE(project->playheadFrame, int64_t(30000));
+
+    // Running out returns it to where playback started.
+    fake->finishPlayback();
+    QTRY_COMPARE(play->text(), QString("▶  Play"));
+    QCOMPARE(project->playheadFrame, int64_t(1000));
 }
 
 QTEST_MAIN(TestGui)
