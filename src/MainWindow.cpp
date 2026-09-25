@@ -358,9 +358,6 @@ void MainWindow::buildUi() {
     limiterCeilingSlider_->setRange(-12, 0);
     limiterCeilingSlider_->setValue(-1);
     limiterCeilingValueLabel_ = new QLabel("-1 dB");
-    grid->addWidget(limiterEnable_, 0, 0);
-    grid->addWidget(limiterCeilingSlider_, 0, 1);
-    grid->addWidget(limiterCeilingValueLabel_, 0, 2);
 
     gainEnable_ = new QCheckBox("Gain");
     gainSlider_ = new QSlider(Qt::Horizontal);
@@ -441,10 +438,16 @@ void MainWindow::buildUi() {
     voiceEffectCombo_->addItem("Distortion", static_cast<int>(VoiceEffect::Distortion));
     grid->addWidget(voiceEffectCombo_, 9, 1, 1, 2);
 
+    // The limiter sits at the end of the chain (it caps whatever the stages
+    // above produce), so its row sits at the bottom of the panel too.
+    grid->addWidget(limiterEnable_, 10, 0);
+    grid->addWidget(limiterCeilingSlider_, 10, 1);
+    grid->addWidget(limiterCeilingValueLabel_, 10, 2);
+
     applyEffectButton_ = new QPushButton("Apply to Selection");
     applyEffectButton_->setFocusPolicy(Qt::NoFocus);
     applyEffectButton_->setToolTip("Destructively apply these filter settings to the current selection (Ctrl+R)");
-    grid->addWidget(applyEffectButton_, 10, 0, 1, 3);
+    grid->addWidget(applyEffectButton_, 11, 0, 1, 3);
     connect(applyEffectButton_, &QPushButton::clicked, this, &MainWindow::onApplyEffect);
 
     // Ctrl+R mirrors Audacity's "repeat/apply last effect" muscle memory.

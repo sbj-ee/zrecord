@@ -14,7 +14,32 @@ private slots:
     void fade_handlesDegenerateBuffers();
     void limiter_holdsOutputUnderCeiling();
     void noiseGate_passesLoudAndCutsQuiet();
+    void chainLimiter_capsGainApplied();
+    void chainLimiter_capsEveryVoiceEffect();
 };
+
+namespace {
+
+float chainPeak(const FilterSettings& settings, float amplitude, double hz = 440.0) {
+    FilterChain chain;
+    chain.prepare(48000.0, 2);
+    chain.setSettings(settings);
+    const size_t frames = 48000;
+    std::vector<float> buffer(frames * 2);
+    for (size_t f = 0; f < frames; ++f) {
+        const float v = amplitude * static_cast<float>(std::sin(2.0 * M_PI * hz * f / 48000.0));
+        buffer[f * 2] = v;
+        buffer[f * 2 + 1] = v;
+    }
+    chain.process(buffer, frames);
+    float peak = 0.0f;
+    for (float v : buffer) {
+        peak = std::max(peak, std::fabs(v));
+    }
+    return peak;
+}
+
+} // namespace
 
 void TestFilters::fadeIn_rampsFromSilenceToUnity() {
     std::vector<float> samples(5, 1.0f);
@@ -97,6 +122,42 @@ void TestFilters::noiseGate_passesLoudAndCutsQuiet() {
         quiet = gate.process(0.0001f);
     }
     QVERIFY2(std::fabs(quiet) < 0.0001f, qPrintable(QString("quiet signal leaked at %1").arg(quiet)));
+}
+
+void TestFilters::chainLimiter_capsGainApplied() {
+    // Regression: the limiter ran first, so gain applied after it went
+    // straight past the ceiling (-1 dB limiter + 12 dB gain gave +6 dBFS).
+    FilterSettings settings;
+    settings.limiterEnabled = true;
+    settings.limiterCeilingDb = -1.0;
+    settings.gainEnabled = true;
+    settings.gainDb = 12.0;
+    const float ceiling = static_cast<float>(std::pow(10.0, -1.0 / 20.0));
+    const float peak = chainPeak(settings, 0.5f);
+    QVERIFY2(peak <= ceiling + 1e-4f,
+             qPrintable(QString("peak %1 exceeded the %2 ceiling").arg(peak).arg(ceiling)));
+}
+
+void TestFilters::chainLimiter_capsEveryVoiceEffect() {
+    // Nothing downstream of the limiter may push the signal back over it:
+    // echo adds a delayed copy, distortion normalises to full scale.
+    const float ceiling = static_cast<float>(std::pow(10.0, -6.0 / 20.0));
+    for (VoiceEffect effect : {VoiceEffect::Robot, VoiceEffect::Echo, VoiceEffect::DeepVoice,
+                               VoiceEffect::Chipmunk, VoiceEffect::Distortion}) {
+        FilterSettings settings;
+        settings.limiterEnabled = true;
+        settings.limiterCeilingDb = -6.0;
+        settings.gainEnabled = true;
+        settings.gainDb = 6.0;
+        settings.compressorEnabled = true;
+        settings.voiceEffect = effect;
+        const float peak = chainPeak(settings, 0.9f, 220.0);
+        QVERIFY2(peak <= ceiling + 1e-4f,
+                 qPrintable(QString("effect %1: peak %2 exceeded the %3 ceiling")
+                                .arg(static_cast<int>(effect))
+                                .arg(peak)
+                                .arg(ceiling)));
+    }
 }
 
 QTEST_GUILESS_MAIN(TestFilters)

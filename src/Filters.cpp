@@ -305,9 +305,6 @@ void FilterChain::process(std::vector<float>& interleaved, size_t frameCount) {
             size_t idx = i * static_cast<size_t>(channels_) + static_cast<size_t>(c);
             float sample = interleaved[idx];
 
-            if (settings_.limiterEnabled) {
-                sample = limiter_[c].process(sample);
-            }
             if (settings_.gainEnabled) {
                 sample = static_cast<float>(sample * gainLinear);
             }
@@ -340,6 +337,13 @@ void FilterChain::process(std::vector<float>& interleaved, size_t frameCount) {
                     break;
                 case VoiceEffect::None:
                     break;
+            }
+
+            // Last, so nothing after it can push the signal back over the
+            // ceiling: gain, the compressor and the voice effects (echo adds
+            // its delayed copy on top) all run before it.
+            if (settings_.limiterEnabled) {
+                sample = limiter_[c].process(sample);
             }
 
             interleaved[idx] = sample;

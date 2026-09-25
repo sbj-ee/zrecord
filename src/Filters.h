@@ -157,9 +157,11 @@ struct FilterSettings {
     VoiceEffect voiceEffect = VoiceEffect::None;
 };
 
-// Applies the configured chain (gain -> high-pass -> low-pass -> noise gate)
-// to interleaved multi-channel float buffers. Each channel gets independent
-// filter state.
+// Applies the configured chain, in this order:
+//   gain -> high-pass -> low-pass -> noise gate -> compressor -> voice effect
+//   -> limiter
+// to interleaved multi-channel float buffers. The limiter is last so it
+// really does cap the output. Each channel gets independent filter state.
 class FilterChain {
 public:
     void prepare(double sampleRate, int channels);

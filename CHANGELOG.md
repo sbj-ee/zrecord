@@ -14,6 +14,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrapped around on save: 1.2 reopened as -0.8. Project clips are now stored as
   32-bit float WAV, which reopens exactly; projects saved as 24-bit still load.
   Integer-PCM exports (WAV/FLAC) now clip instead of wrapping.
+- **The limiter now actually prevents clipping.** It ran first in the filter
+  chain, so gain, the compressor and the voice effects after it could push the
+  signal straight past the ceiling (-1 dB limiter + 12 dB gain gave +6 dBFS).
+  It now runs last, and its row sits at the bottom of the filter panel.
 
 ## [0.2.0]
 
