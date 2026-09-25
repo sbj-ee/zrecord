@@ -935,6 +935,14 @@ void TrackPanel::paintEvent(QPaintEvent*) {
     }
 }
 
+std::vector<std::pair<int, int>> TrackPanel::selectedClips() const {
+    std::vector<std::pair<int, int>> out;
+    for (const ClipRef& ref : selectedClips_) {
+        out.emplace_back(ref.track, ref.index);
+    }
+    return out;
+}
+
 void TrackPanel::followPlayhead(int64_t frame) {
     if (project_ == nullptr) {
         return;

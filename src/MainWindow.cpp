@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 
+#include "NormalizeDialog.h"
+
 #include <QAction>
 #include <QActionGroup>
 #include <QCloseEvent>
@@ -258,6 +260,10 @@ void MainWindow::buildUi() {
     connect(silenceAction_, &QAction::triggered, this, &MainWindow::onSilenceSelection);
     connect(fadeInAction_, &QAction::triggered, this, &MainWindow::onFadeIn);
     connect(fadeOutAction_, &QAction::triggered, this, &MainWindow::onFadeOut);
+    // Menu-only, like Select All: the toolbar is already full.
+    normalizeAction_ = new QAction("Normalize / Amplify...", this);
+    normalizeAction_->setStatusTip("Scale the selection or selected clips to a peak level, or by a gain");
+    connect(normalizeAction_, &QAction::triggered, this, &MainWindow::onNormalize);
     connect(crossfadeAction_, &QAction::triggered, this, &MainWindow::onCrossfade);
     connect(undoAction_, &QAction::triggered, undoStack_, &QUndoStack::undo);
     connect(redoAction_, &QAction::triggered, undoStack_, &QUndoStack::redo);
@@ -535,6 +541,7 @@ void MainWindow::buildMenus() {
     editMenu->addAction(silenceAction_);
     editMenu->addAction(fadeInAction_);
     editMenu->addAction(fadeOutAction_);
+    editMenu->addAction(normalizeAction_);
     editMenu->addAction(crossfadeAction_);
     editMenu->addAction(applyEffectAction_);
 
@@ -675,7 +682,7 @@ void MainWindow::setControlsEnabled(bool recording) {
                              addTrackAction_, removeTrackAction_, importAction_,
                              cutAction_, copyAction_, pasteAction_, deleteAction_,
                              silenceAction_, fadeInAction_, fadeOutAction_, crossfadeAction_,
-                             applyEffectAction_, addLabelAction_, selectAllAction_}) {
+                             applyEffectAction_, addLabelAction_, selectAllAction_, normalizeAction_}) {
         action->setEnabled(!recording);
     }
     if (!recording) {
@@ -1201,6 +1208,56 @@ void MainWindow::onCrossfade() {
     onSelectionChanged();
 }
 
+void MainWindow::onNormalize() {
+    // A time selection wins; otherwise whole clips picked with the Move tool.
+    std::vector<GainTarget> targets;
+    QString scope;
+    if (!project_.selection.isEmpty()) {
+        const Selection& sel = project_.selection;
+        targets.push_back(GainTarget{sel.trackIndex, sel.startFrame, sel.endFrame});
+        scope = QString("the selection (%1)").arg(formatDuration(double(sel.endFrame - sel.startFrame) / project_.sampleRate));
+    } else {
+        for (const auto& [trackIndex, clipIndex] : trackPanel_->selectedClips()) {
+            if (trackIndex < 0 || trackIndex >= static_cast<int>(project_.tracks.size())) {
+                continue;
+            }
+            const auto& clips = project_.tracks[static_cast<size_t>(trackIndex)].clips;
+            if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
+                const Clip& clip = clips[static_cast<size_t>(clipIndex)];
+                targets.push_back(GainTarget{trackIndex, clip.startFrame, clip.endFrame()});
+            }
+        }
+        scope = targets.size() == 1 ? QString("1 clip") : QString("%1 clips").arg(targets.size());
+    }
+    if (targets.empty()) {
+        QMessageBox::information(this, "Normalize / Amplify",
+                                  "Select a time range, or pick clips with the Move tool, first.");
+        return;
+    }
+
+    float peak = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(project_.mutex);
+        peak = measurePeak(project_, targets);
+    }
+    if (peak <= 0.0f) {
+        QMessageBox::information(this, "Normalize / Amplify", "That audio is silent; there is nothing to scale.");
+        return;
+    }
+
+    NormalizeDialog dialog(peak, scope, this);
+    const bool accepted = normalizeDriver_ ? normalizeDriver_(dialog) : dialog.exec() == QDialog::Accepted;
+    if (!accepted) {
+        return;
+    }
+    const GainPlan plan = dialog.plan();
+    if (std::fabs(plan.gain - 1.0f) < 1e-6f) {
+        return; // no change, no undo step
+    }
+    undoStack_->push(new GainCommand(project_, targets, plan.gain, dialog.actionName()));
+    trackPanel_->refresh();
+}
+
 void MainWindow::onApplyEffect() {
     if (project_.selection.isEmpty()) {
         return;
@@ -1331,6 +1388,9 @@ void MainWindow::onSelectionChanged() {
     // while the button is greyed out.
     applyEffectAction_->setEnabled(hasSelection);
     applyEffectButton_->setEnabled(hasSelection);
+    if (normalizeAction_ != nullptr) {
+        normalizeAction_->setEnabled(projectHasAnyContent());
+    }
     if (selectAllAction_ != nullptr) {
         selectAllAction_->setEnabled(projectHasAnyContent());
     }

@@ -54,6 +54,7 @@ private slots:
     void onSilenceSelection();
     void onFadeIn();
     void onFadeOut();
+    void onNormalize();
     void onCrossfade();
     void onApplyEffect();
     void onSelectAll();
@@ -90,6 +91,11 @@ public:
     // Tests replace the dialog with a function.
     using UnsavedChangesPrompt = std::function<int(const QString& action)>;
     void setUnsavedChangesPromptForTest(UnsavedChangesPrompt prompt) { unsavedPrompt_ = std::move(prompt); }
+
+    // Replaces exec() of the Normalize/Amplify dialog: the function sets it
+    // up and returns whether it was accepted.
+    using NormalizeDialogDriver = std::function<bool(class NormalizeDialog&)>;
+    void setNormalizeDialogDriverForTest(NormalizeDialogDriver driver) { normalizeDriver_ = std::move(driver); }
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -132,6 +138,7 @@ private:
     QString projectPath_;          // last saved/opened .zrproj, if any
     bool settingsDirty_ = false;   // header changes outside the undo stack
     UnsavedChangesPrompt unsavedPrompt_;
+    NormalizeDialogDriver normalizeDriver_;
 
     QComboBox* deviceCombo_ = nullptr;
     QComboBox* channelsCombo_ = nullptr;
@@ -161,6 +168,7 @@ private:
     QAction* silenceAction_ = nullptr;
     QAction* fadeInAction_ = nullptr;
     QAction* fadeOutAction_ = nullptr;
+    QAction* normalizeAction_ = nullptr;
     QAction* crossfadeAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;

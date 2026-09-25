@@ -11,6 +11,7 @@
 #include "ProjectFile.h"
 #include "SavedProjectPaths.h"
 #include "TrackPanel.h"
+#include "NormalizeDialog.h"
 
 using namespace zrecord;
 
@@ -63,6 +64,9 @@ private slots:
     void clipSelectionIsDroppedWhenTracksChange();
     void rulerClickSeeksWhileStopped();
     void seekingAndAutoScrollDuringPlayback();
+    void normalizeDialogFlagsClipping();
+    void normalizeSelectionIsOneUndoStep();
+    void amplifySelectedClips();
 
 private:
     Project project_;
@@ -756,6 +760,111 @@ void TestGui::seekingAndAutoScrollDuringPlayback() {
     fake->finishPlayback();
     QTRY_COMPARE(play->text(), QString("▶  Play"));
     QCOMPARE(project->playheadFrame, int64_t(30000));
+}
+
+void TestGui::normalizeDialogFlagsClipping() {
+    NormalizeDialog dialog(0.5f, "the selection");
+    // Default: normalize to -1 dBFS, which fits.
+    QVERIFY(!dialog.clipIndicatorShown());
+    QVERIFY(dialog.acceptEnabled());
+    QVERIFY(std::fabs(linearToDb(dialog.plan().resultingPeak) + 1.0f) < 1e-3f);
+
+    // +12 dB on a -6 dBFS peak would clip: the indicator shows and OK waits
+    // for "Allow clipping".
+    dialog.setMode(NormalizeDialog::Mode::Amplify);
+    dialog.setGainDb(12.0);
+    QVERIFY(dialog.clipIndicatorShown());
+    QVERIFY(!dialog.acceptEnabled());
+    dialog.setAllowClipping(true);
+    QVERIFY(dialog.acceptEnabled());
+    QCOMPARE(dialog.actionName(), QString("Amplify"));
+
+    dialog.setGainDb(3.0);
+    QVERIFY(!dialog.clipIndicatorShown());
+
+    // Normalizing above 0 dBFS clips too.
+    dialog.setMode(NormalizeDialog::Mode::Normalize);
+    dialog.setTargetDb(1.0);
+    QVERIFY(dialog.clipIndicatorShown());
+}
+
+void TestGui::normalizeSelectionIsOneUndoStep() {
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    project->channels = 1;
+    Track track;
+    track.clips.push_back(makeClip(0, 1000, 0.25f));
+    project->tracks.push_back(std::move(track));
+    TrackPanel* panel = window.findChild<TrackPanel*>();
+    panel->refresh();
+    panel->setFramesPerPixelForTest(1.0);
+    // Drag out frames 100..200 so MainWindow sees a selection change.
+    QTest::mousePress(panel, Qt::LeftButton, Qt::NoModifier, QPoint(TrackPanel::kHeaderWidth + 100, laneCentreY(0)));
+    QTest::mouseMove(panel, QPoint(TrackPanel::kHeaderWidth + 200, laneCentreY(0)));
+    QTest::mouseRelease(panel, Qt::LeftButton, Qt::NoModifier, QPoint(TrackPanel::kHeaderWidth + 200, laneCentreY(0)));
+    QCOMPARE(project->selection.startFrame, int64_t(100));
+    QCOMPARE(project->selection.endFrame, int64_t(200));
+    QUndoStack* undo = window.findChild<QUndoStack*>();
+    const int before = undo->count();
+
+    QAction* normalize = nullptr;
+    for (QAction* action : window.findChildren<QAction*>()) {
+        if (action->text() == "Normalize / Amplify...") {
+            normalize = action;
+        }
+    }
+    QVERIFY(normalize != nullptr);
+    QVERIFY(normalize->isEnabled());
+    window.setNormalizeDialogDriverForTest([](NormalizeDialog& dialog) {
+        dialog.setMode(NormalizeDialog::Mode::Normalize);
+        dialog.setTargetDb(-6.0);
+        return true;
+    });
+    normalize->trigger();
+
+    QCOMPARE(undo->count(), before + 1);
+    QCOMPARE(undo->undoText(), QString("Normalize"));
+    const Clip& clip = project->tracks[0].clips[0];
+    QVERIFY(std::fabs(clip.samples[150] - dbToLinear(-6.0f)) < 1e-5f);
+    QCOMPARE(clip.samples[50], 0.25f); // outside the selection
+    undo->undo();
+    QCOMPARE(project->tracks[0].clips[0].samples[150], 0.25f);
+}
+
+void TestGui::amplifySelectedClips() {
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    window.resize(1000, 600);
+    TrackPanel* panel = window.findChild<TrackPanel*>();
+    Project* project = panel->projectForTest();
+    project->channels = 1;
+    project->sampleRate = 44100.0;
+    for (int i = 0; i < 2; ++i) {
+        Track track;
+        track.clips.push_back(makeClip(0, 40000, 0.1f * float(i + 1)));
+        project->tracks.push_back(std::move(track));
+    }
+    panel->refresh();
+    panel->setFramesPerPixelForTest(100.0);
+    window.refreshActionStateForTest(); // audio was added behind MainWindow's back
+    panel->setTool(TrackPanel::Tool::Move);
+    QTest::mouseClick(panel, Qt::LeftButton, Qt::NoModifier, QPoint(TrackPanel::kHeaderWidth + 100, laneCentreY(0)));
+    QTest::mouseClick(panel, Qt::LeftButton, Qt::ControlModifier, QPoint(TrackPanel::kHeaderWidth + 100, laneCentreY(1)));
+    QCOMPARE(panel->selectedClips().size(), size_t(2));
+
+    window.setNormalizeDialogDriverForTest([](NormalizeDialog& dialog) {
+        dialog.setMode(NormalizeDialog::Mode::Amplify);
+        dialog.setGainDb(6.0);
+        return true;
+    });
+    for (QAction* action : window.findChildren<QAction*>()) {
+        if (action->text() == "Normalize / Amplify...") {
+            QVERIFY(action->isEnabled());
+            action->trigger();
+        }
+    }
+    QVERIFY(std::fabs(project->tracks[0].clips[0].samples[0] - 0.1f * dbToLinear(6.0f)) < 1e-5f);
+    QVERIFY(std::fabs(project->tracks[1].clips[0].samples[39999] - 0.2f * dbToLinear(6.0f)) < 1e-5f);
+    QCOMPARE(window.findChild<QUndoStack*>()->undoText(), QString("Amplify"));
 }
 
 QTEST_MAIN(TestGui)

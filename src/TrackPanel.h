@@ -46,6 +46,9 @@ public:
     int spectrogramTilesRenderedForTest() const { return spectrogramTilesRendered_; }
     size_t selectedClipCountForTest() const { return selectedClips_.size(); }
 
+    // Clips picked out with the Move tool, as (track, clip index) pairs.
+    std::vector<std::pair<int, int>> selectedClips() const;
+
     void setSnapEnabled(bool enabled);
     bool snapEnabled() const { return snapEnabled_; }
 

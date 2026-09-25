@@ -332,4 +332,33 @@ void RemoveTrackCommand::undo() {
     project_.tracks.insert(project_.tracks.begin() + trackIndex_, removed_);
 }
 
+GainCommand::GainCommand(Project& project, std::vector<GainTarget> targets, float gain, const QString& text)
+    : QUndoCommand(text), project_(project), targets_(std::move(targets)), gain_(gain) {}
+
+void GainCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    if (after_.empty()) {
+        for (const GainTarget& target : targets_) {
+            if (target.trackIndex >= 0 && target.trackIndex < static_cast<int>(project_.tracks.size())) {
+                before_.emplace(target.trackIndex, project_.tracks[static_cast<size_t>(target.trackIndex)]);
+            }
+        }
+        applyGain(project_, targets_, gain_);
+        for (const auto& entry : before_) {
+            after_.emplace(entry.first, project_.tracks[static_cast<size_t>(entry.first)]);
+        }
+    } else {
+        for (const auto& entry : after_) {
+            project_.tracks[static_cast<size_t>(entry.first)] = entry.second;
+        }
+    }
+}
+
+void GainCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    for (const auto& entry : before_) {
+        project_.tracks[static_cast<size_t>(entry.first)] = entry.second;
+    }
+}
+
 } // namespace zrecord

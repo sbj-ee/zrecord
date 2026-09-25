@@ -31,6 +31,7 @@ add_library(zrecord_core STATIC
     src/SampleBuffer.cpp
     src/PlaybackMixer.cpp
     src/Resampler.cpp
+    src/Gain.cpp
 )
 
 target_include_directories(zrecord_core PUBLIC src)
@@ -47,6 +48,7 @@ target_link_libraries(zrecord_core PUBLIC
 add_library(zrecord_gui STATIC
     src/MainWindow.cpp
     src/TrackPanel.cpp
+    src/NormalizeDialog.cpp
 )
 
 target_link_libraries(zrecord_gui PUBLIC zrecord_core)

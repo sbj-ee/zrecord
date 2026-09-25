@@ -14,6 +14,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   there without restarting. A click in a lane with the Select tool also
   seeks. The view pages along to keep the playhead in sight during
   playback.
+- **Normalize / Amplify** (Edit menu). Scale a time selection, or clips
+  picked with the Move tool (on any tracks), to a target peak in dBFS, or
+  by a fixed gain in dB. It is one undo step. The dialog shows the current
+  and resulting peak. If the result would pass full scale, a red CLIP
+  indicator appears and OK needs "Allow clipping".
 
 ### Fixed
 

@@ -4,6 +4,9 @@
 #include <optional>
 
 #include "Filters.h"
+#include "Gain.h"
+
+#include <map>
 #include "Project.h"
 
 namespace zrecord {
@@ -272,6 +275,24 @@ private:
     Project& project_;
     int trackIndex_;
     Track removed_;
+};
+
+// Normalize / Amplify: one gain factor over a time selection or over whole
+// clips, possibly on several tracks, as a single undo step. Snapshots are
+// per affected track and cheap (clip audio is shared, copy-on-write).
+class GainCommand : public QUndoCommand {
+public:
+    GainCommand(Project& project, std::vector<GainTarget> targets, float gain, const QString& text);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    Project& project_;
+    std::vector<GainTarget> targets_;
+    float gain_;
+    std::map<int, Track> before_;
+    std::map<int, Track> after_;
 };
 
 } // namespace zrecord
