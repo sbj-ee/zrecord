@@ -313,27 +313,6 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
     // Real-time thread. No allocation, no blocking lock, no unbounded growth:
     // the scratch block is preallocated, settings are picked up with try_lock,
     // and the samples leave via a lock-free ring the UI drains.
-    const size_t needed = static_cast<size_t>(frameCount) * static_cast<size_t>(channels_);
-    if (scratch_.size() < needed) {
-        // The host asked for a bigger block than we sized for. Growing here
-        // allocates, which is exactly what we are avoiding -- but dropping the
-        // audio would be worse, and the next take will be sized correctly.
-        scratch_.resize(needed);
-    }
-
-    if (input != nullptr && !inputMuted_.load(std::memory_order_relaxed)) {
-        std::copy(input, input + needed, scratch_.begin());
-    } else {
-        // A muted take still advances (so timing stays intact) but records
-        // silence, and the level meter correctly reads zero.
-        std::fill_n(scratch_.begin(), needed, 0.0f);
-    }
-
-    float peak = 0.0f;
-    for (size_t i = 0; i < needed; ++i) {
-        peak = std::max(peak, std::fabs(scratch_[i]));
-    }
-
     if (settingsDirty_.load(std::memory_order_acquire)) {
         // try_lock, never lock: if the UI happens to hold it this instant we
         // simply use the current settings for one more block.
@@ -344,8 +323,29 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
         }
     }
 
-    filterChain_.process(scratch_, frameCount);
-    captureRing_.write(scratch_.data(), needed);
+    // The scratch block (0.5 s, sized at startRecording) is never grown here:
+    // a host block larger than that is processed in slices instead of
+    // allocating on the audio thread.
+    const size_t channels = static_cast<size_t>(channels_);
+    const size_t sliceFrames = scratch_.size() / channels;
+    const bool muted = input == nullptr || inputMuted_.load(std::memory_order_relaxed);
+    float peak = 0.0f;
+    for (size_t done = 0; done < frameCount && sliceFrames > 0; done += sliceFrames) {
+        const size_t frames = std::min(sliceFrames, static_cast<size_t>(frameCount) - done);
+        const size_t count = frames * channels;
+        if (!muted) {
+            std::copy(input + done * channels, input + done * channels + count, scratch_.begin());
+        } else {
+            // A muted take still advances (so timing stays intact) but records
+            // silence, and the level meter correctly reads zero.
+            std::fill_n(scratch_.begin(), count, 0.0f);
+        }
+        for (size_t i = 0; i < count; ++i) {
+            peak = std::max(peak, std::fabs(scratch_[i]));
+        }
+        filterChain_.process(scratch_, frames);
+        captureRing_.write(scratch_.data(), count);
+    }
 
     raiseMeterPeak(peak);
     return paContinue;
