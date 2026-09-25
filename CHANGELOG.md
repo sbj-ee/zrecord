@@ -19,6 +19,16 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by a fixed gain in dB. It is one undo step. The dialog shows the current
   and resulting peak. If the result would pass full scale, a red CLIP
   indicator appears and OK needs "Allow clipping".
+- **Voice Changer** (Edit menu). An offline effect on a time selection, or
+  on clips picked with the Move tool. It shifts pitch by up to +/-12
+  semitones and keeps the length unchanged. A separate formant control
+  keeps shifted voices natural (0 leaves the vocal resonances where they
+  were), or moves them for a cartoon voice. There is an optional robot
+  monotone. Presets: Deeper, Higher, Robot, Chipmunk and Custom (touching
+  any control switches to Custom). **Preview** plays the processed
+  selection through the normal playback engine without changing anything.
+  Apply is one undo step. It uses a built-in phase vocoder with
+  cepstral-envelope formant shifting, so there is no new dependency.
 - **dB peak meter.** It replaces the linear level bar and reads -60 to
   +3 dBFS, with green, amber and red zones. The bar falls back smoothly,
   and a peak-hold marker with a readout keeps the recent maximum for
