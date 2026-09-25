@@ -140,10 +140,12 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
             Clip clip;
             clip.startFrame = startFrame;
             int sampleRate = 0;
-            if (!AudioFileReader::read(dir.filePath(relativeFile).toStdString(), clip.samples,
+            std::vector<float> samples;
+            if (!AudioFileReader::read(dir.filePath(relativeFile).toStdString(), samples,
                                         sampleRate, clip.channels, errorMessage)) {
                 return false;
             }
+            clip.samples = SampleBuffer(samples);
             clip.peaks.build(clip.samples, clip.channels);
             track.clips.push_back(std::move(clip));
         }

@@ -7,8 +7,8 @@
 
 namespace zrecord {
 
-void PeakCache::build(const std::vector<float>& samples, int channels) {
-    blocks_.clear();
+void PeakCache::build(const SampleBuffer& samples, int channels) {
+    blocks_.reset();
     built_ = false;
     if (channels <= 0 || samples.empty()) {
         built_ = true;
@@ -16,16 +16,19 @@ void PeakCache::build(const std::vector<float>& samples, int channels) {
     }
     int64_t frameCount = static_cast<int64_t>(samples.size()) / channels;
     int64_t blockCount = (frameCount + kBlockFrames - 1) / kBlockFrames;
-    blocks_.resize(static_cast<size_t>(blockCount));
+    auto blocks = std::make_shared<std::vector<MinMax>>(static_cast<size_t>(blockCount));
+    std::vector<float> block(static_cast<size_t>(kBlockFrames) * static_cast<size_t>(channels));
     for (int64_t b = 0; b < blockCount; ++b) {
         int64_t startFrame = b * kBlockFrames;
         int64_t endFrame = std::min(startFrame + kBlockFrames, frameCount);
+        samples.copyTo(static_cast<size_t>(startFrame) * channels,
+                       static_cast<size_t>(endFrame - startFrame) * channels, block.data());
         float minValue = 0.0f;
         float maxValue = 0.0f;
         bool first = true;
-        for (int64_t f = startFrame; f < endFrame; ++f) {
+        for (int64_t f = 0; f < endFrame - startFrame; ++f) {
             for (int c = 0; c < channels; ++c) {
-                float s = samples[static_cast<size_t>(f) * channels + c];
+                float s = block[static_cast<size_t>(f) * channels + c];
                 if (first) {
                     minValue = maxValue = s;
                     first = false;
@@ -35,21 +38,22 @@ void PeakCache::build(const std::vector<float>& samples, int channels) {
                 }
             }
         }
-        blocks_[static_cast<size_t>(b)] = {minValue, maxValue};
+        (*blocks)[static_cast<size_t>(b)] = {minValue, maxValue};
     }
+    blocks_ = std::move(blocks);
     built_ = true;
 }
 
 void PeakCache::invalidate() {
-    blocks_.clear();
+    blocks_.reset();
     built_ = false;
 }
 
 PeakCache::MinMax PeakCache::blockAt(int64_t blockIndex) const {
-    if (blockIndex < 0 || blockIndex >= static_cast<int64_t>(blocks_.size())) {
+    if (!blocks_ || blockIndex < 0 || blockIndex >= static_cast<int64_t>(blocks_->size())) {
         return {};
     }
-    return blocks_[static_cast<size_t>(blockIndex)];
+    return (*blocks_)[static_cast<size_t>(blockIndex)];
 }
 
 int64_t Track::endFrame() const {
@@ -115,10 +119,11 @@ void Project::splitClipAt(Track& track, int64_t frame, int channels) {
             Clip second;
             second.channels = channels;
             second.startFrame = frame;
-            second.samples.assign(clip.samples.begin() + static_cast<long>(splitSampleIndex), clip.samples.end());
+            // Both halves share the original chunks; nothing is copied.
+            second.samples = clip.samples.slice(splitSampleIndex, clip.samples.size() - splitSampleIndex);
             second.peaks.build(second.samples, channels);
 
-            clip.samples.resize(splitSampleIndex);
+            clip.samples = clip.samples.slice(0, splitSampleIndex);
             clip.peaks.build(clip.samples, channels);
 
             track.clips.insert(track.clips.begin() + static_cast<long>(i) + 1, std::move(second));
@@ -142,8 +147,8 @@ std::vector<float> Project::removeRange(Track& track, int64_t startFrame, int64_
     for (auto& clip : track.clips) {
         if (clip.startFrame >= startFrame && clip.endFrame() <= endFrame) {
             int64_t destFrameOffset = clip.startFrame - startFrame;
-            std::copy(clip.samples.begin(), clip.samples.end(),
-                      removed.begin() + static_cast<long>(destFrameOffset) * channels);
+            clip.samples.copyTo(0, clip.samples.size(),
+                                removed.data() + static_cast<size_t>(destFrameOffset) * channels);
             continue; // dropped: fully inside the removed range
         }
         if (clip.startFrame >= endFrame) {
@@ -155,7 +160,7 @@ std::vector<float> Project::removeRange(Track& track, int64_t startFrame, int64_
     return removed;
 }
 
-void Project::insertRange(Track& track, int64_t atFrame, const std::vector<float>& samples, int channels) {
+void Project::insertRange(Track& track, int64_t atFrame, const SampleBuffer& samples, int channels) {
     if (samples.empty() || channels <= 0) {
         return;
     }
@@ -186,8 +191,8 @@ void Project::silenceRange(Track& track, int64_t startFrame, int64_t endFrame, i
         }
         int64_t localStart = overlapStart - clip.startFrame;
         int64_t localEnd = overlapEnd - clip.startFrame;
-        std::fill(clip.samples.begin() + static_cast<long>(localStart) * channels,
-                  clip.samples.begin() + static_cast<long>(localEnd) * channels, 0.0f);
+        clip.samples.fill(static_cast<size_t>(localStart) * channels,
+                          static_cast<size_t>(localEnd - localStart) * channels, 0.0f);
         clip.peaks.build(clip.samples, channels);
     }
 }
@@ -202,9 +207,9 @@ void Project::writeRange(Track& track, int64_t startFrame, int64_t endFrame, con
         int64_t clipLocalStart = overlapStart - clip.startFrame;
         int64_t srcLocalStart = overlapStart - startFrame;
         int64_t frames = overlapEnd - overlapStart;
-        std::copy(samples.begin() + static_cast<long>(srcLocalStart) * channels,
-                  samples.begin() + static_cast<long>(srcLocalStart + frames) * channels,
-                  clip.samples.begin() + static_cast<long>(clipLocalStart) * channels);
+        clip.samples.write(static_cast<size_t>(clipLocalStart) * channels,
+                           samples.data() + static_cast<size_t>(srcLocalStart) * channels,
+                           static_cast<size_t>(frames) * channels);
         clip.peaks.build(clip.samples, channels);
     }
 }
@@ -223,14 +228,13 @@ std::vector<float> Project::copyRange(const Track& track, int64_t startFrame, in
         int64_t clipLocalStart = overlapStart - clip.startFrame;
         int64_t outLocalStart = overlapStart - startFrame;
         int64_t frames = overlapEnd - overlapStart;
-        std::copy(clip.samples.begin() + static_cast<long>(clipLocalStart) * channels,
-                  clip.samples.begin() + static_cast<long>(clipLocalStart + frames) * channels,
-                  out.begin() + static_cast<long>(outLocalStart) * channels);
+        clip.samples.copyTo(static_cast<size_t>(clipLocalStart) * channels, static_cast<size_t>(frames) * channels,
+                            out.data() + static_cast<size_t>(outLocalStart) * channels);
     }
     return out;
 }
 
-void Project::appendClip(Track& track, const std::vector<float>& samples, int channels) {
+void Project::appendClip(Track& track, const SampleBuffer& samples, int channels) {
     if (samples.empty() || channels <= 0) {
         return;
     }
@@ -265,24 +269,24 @@ bool Project::crossfadeClips(Track& track, int firstClipIndex, int64_t frames, i
     Clip merged;
     merged.channels = channels;
     merged.startFrame = a.startFrame;
-    merged.samples.resize(static_cast<size_t>(aLen + bLen - frames) * ch);
-
-    // Everything of A before the overlap.
-    std::copy(a.samples.begin(), a.samples.begin() + static_cast<long>(aLen - frames) * channels,
-              merged.samples.begin());
+    const size_t headSamples = static_cast<size_t>(aLen - frames) * ch;
+    const size_t overlapSamples = static_cast<size_t>(frames) * ch;
 
     // The overlap: A's tail faded out against B's head faded in.
-    std::vector<float> overlap(a.samples.begin() + static_cast<long>(aLen - frames) * channels,
-                                a.samples.end());
-    std::vector<float> incoming(b.samples.begin(),
-                                 b.samples.begin() + static_cast<long>(frames) * channels);
+    std::vector<float> overlap(overlapSamples);
+    a.samples.copyTo(headSamples, overlapSamples, overlap.data());
+    std::vector<float> incoming(overlapSamples);
+    b.samples.copyTo(0, overlapSamples, incoming.data());
     mixEqualPowerCrossfade(overlap, incoming, channels);
-    std::copy(overlap.begin(), overlap.end(),
-              merged.samples.begin() + static_cast<long>(aLen - frames) * channels);
 
-    // Whatever of B is left after the overlap.
-    std::copy(b.samples.begin() + static_cast<long>(frames) * channels, b.samples.end(),
-              merged.samples.begin() + static_cast<long>(aLen) * channels);
+    // Crossfading is rare and one-off, so the merged clip is simply built
+    // fresh rather than stitched from shared chunks.
+    std::vector<float> joined(static_cast<size_t>(aLen + bLen - frames) * ch);
+    a.samples.copyTo(0, headSamples, joined.data());
+    std::copy(overlap.begin(), overlap.end(), joined.begin() + static_cast<long>(headSamples));
+    b.samples.copyTo(overlapSamples, b.samples.size() - overlapSamples,
+                     joined.data() + headSamples + overlapSamples);
+    merged.samples = SampleBuffer(joined);
 
     merged.peaks.build(merged.samples, channels);
 

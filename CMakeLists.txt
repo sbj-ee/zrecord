@@ -26,6 +26,7 @@ add_library(zrecord_core STATIC
     src/Snap.cpp
     src/Commands.cpp
     src/ProjectFile.cpp
+    src/SampleBuffer.cpp
 )
 
 target_include_directories(zrecord_core PUBLIC src)

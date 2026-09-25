@@ -130,7 +130,7 @@ protected:
 
 private:
     int64_t atFrame_;
-    std::vector<float> samples_;
+    SampleBuffer samples_;
     int channels_;
 };
 
@@ -144,7 +144,7 @@ protected:
     void apply() override;
 
 private:
-    std::vector<float> samples_;
+    SampleBuffer samples_;
     int channels_;
 };
 

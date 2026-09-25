@@ -1,6 +1,7 @@
 #include "AudioFileWriter.h"
 
 #include <sndfile.h>
+#include <algorithm>
 #include <cstring>
 
 namespace zrecord {
@@ -25,7 +26,15 @@ int sfFormatFor(AudioFormat format) {
 
 namespace {
 
-bool writeWithFormat(const std::string& path, const std::vector<float>& interleaved, int sampleRate,
+// Either a contiguous vector or a chunked SampleBuffer; the latter is streamed
+// out through a small staging buffer so saving never makes a flat copy.
+struct Source {
+    const std::vector<float>* vector = nullptr;
+    const SampleBuffer* buffer = nullptr;
+    size_t size() const { return vector != nullptr ? vector->size() : buffer->size(); }
+};
+
+bool writeWithFormat(const std::string& path, const Source& source, int sampleRate,
                      int channels, int sfFormat, std::string& errorMessage) {
     SF_INFO info;
     std::memset(&info, 0, sizeof(info));
@@ -52,9 +61,25 @@ bool writeWithFormat(const std::string& path, const std::vector<float>& interlea
     }
 
     sf_count_t frameCount = channels > 0
-        ? static_cast<sf_count_t>(interleaved.size() / static_cast<size_t>(channels))
+        ? static_cast<sf_count_t>(source.size() / static_cast<size_t>(channels))
         : 0;
-    sf_count_t written = sf_writef_float(file, interleaved.data(), frameCount);
+    sf_count_t written = 0;
+    if (source.vector != nullptr) {
+        written = sf_writef_float(file, source.vector->data(), frameCount);
+    } else {
+        constexpr sf_count_t kStageFrames = 8192;
+        std::vector<float> stage(static_cast<size_t>(kStageFrames) * static_cast<size_t>(channels));
+        while (written < frameCount) {
+            sf_count_t n = std::min(kStageFrames, frameCount - written);
+            source.buffer->copyTo(static_cast<size_t>(written) * channels, static_cast<size_t>(n) * channels,
+                                  stage.data());
+            sf_count_t w = sf_writef_float(file, stage.data(), n);
+            written += w;
+            if (w != n) {
+                break;
+            }
+        }
+    }
 
     bool ok = written == frameCount;
     if (!ok) {
@@ -76,15 +101,16 @@ bool AudioFileWriter::write(const std::string& path,
                              int channels,
                              AudioFormat format,
                              std::string& errorMessage) {
-    return writeWithFormat(path, interleaved, sampleRate, channels, sfFormatFor(format), errorMessage);
+    return writeWithFormat(path, Source{&interleaved, nullptr}, sampleRate, channels, sfFormatFor(format),
+                           errorMessage);
 }
 
 bool AudioFileWriter::writeFloatWav(const std::string& path,
-                                     const std::vector<float>& interleaved,
+                                     const SampleBuffer& interleaved,
                                      int sampleRate,
                                      int channels,
                                      std::string& errorMessage) {
-    return writeWithFormat(path, interleaved, sampleRate, channels, SF_FORMAT_WAV | SF_FORMAT_FLOAT,
+    return writeWithFormat(path, Source{nullptr, &interleaved}, sampleRate, channels, SF_FORMAT_WAV | SF_FORMAT_FLOAT,
                            errorMessage);
 }
 

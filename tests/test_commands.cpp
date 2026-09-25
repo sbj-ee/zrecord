@@ -1,6 +1,8 @@
 #include <QUndoStack>
 #include <QtTest>
 
+#include <fstream>
+
 #include "Commands.h"
 
 using namespace zrecord;
@@ -11,10 +13,11 @@ Clip makeRamp(int64_t startFrame, int64_t frameCount, float firstValue = 1.0f) {
     Clip clip;
     clip.channels = 1;
     clip.startFrame = startFrame;
-    clip.samples.resize(static_cast<size_t>(frameCount));
+    std::vector<float> samples(static_cast<size_t>(frameCount));
     for (int64_t f = 0; f < frameCount; ++f) {
-        clip.samples[static_cast<size_t>(f)] = firstValue + static_cast<float>(f);
+        samples[static_cast<size_t>(f)] = firstValue + static_cast<float>(f);
     }
+    clip.samples = samples;
     clip.peaks.build(clip.samples, 1);
     return clip;
 }
@@ -31,6 +34,8 @@ class TestCommands : public QObject {
 
 private slots:
     void init();
+
+    void smallEditsDontDuplicateTheTake();
 
     void deleteSelection_undoRestoresAudio();
     void silenceSelection_undoRestoresAudio();
@@ -321,6 +326,60 @@ void TestCommands::renameLabel_undoRestoresOldText() {
 
     stack_.redo();
     QCOMPARE(project_.labels[0].text, std::string("after"));
+}
+
+namespace {
+long residentKb() {
+    std::ifstream status("/proc/self/status");
+    std::string key;
+    while (status >> key) {
+        if (key == "VmRSS:") {
+            long kb = 0;
+            status >> kb;
+            return kb;
+        }
+    }
+    return -1;
+}
+} // namespace
+
+void TestCommands::smallEditsDontDuplicateTheTake() {
+    // Regression: every edit snapshotted the whole track twice (before and
+    // after), deep-copying all of its audio. A 10-minute stereo take grew by
+    // ~440 MB per 0.1 s Silence. Scaled down here: a 2-minute stereo take
+    // (~44 MB) used to grow ~88 MB per edit; now each edit may copy a chunk
+    // or two.
+    Project project;
+    project.channels = 2;
+    project.sampleRate = 48000.0;
+    QUndoStack stack;
+    stack.push(new AddTrackCommand(project, "Take"));
+    {
+        std::vector<float> take(size_t(48000) * 2 * 120, 0.1f);
+        stack.push(new AppendClipCommand(project, 0, std::move(take), 2, "Record"));
+    }
+    const SampleBuffer recorded = project.tracks[0].clips[0].samples;
+
+    const long before = residentKb();
+    QVERIFY(before > 0);
+    for (int i = 1; i <= 5; ++i) {
+        stack.push(new SilenceSelectionCommand(project, 0, 48000 * i, 48000 * i + 4800));
+    }
+    const long grownKb = residentKb() - before;
+    qInfo("RSS growth over 5 small edits on a 44 MB take: %ld KB", grownKb);
+    QVERIFY2(grownKb < 16 * 1024, qPrintable(QString("grew %1 KB").arg(grownKb)));
+
+    // Structurally: audio far from the edits is still the recorded chunk.
+    const SampleBuffer& now = project.tracks[0].clips[0].samples;
+    QVERIFY(now.sharesChunkAt(recorded, now.size() - 1));
+    QCOMPARE(now[size_t(48000 * 1 + 100) * 2], 0.0f);
+
+    stack.undo();
+    stack.undo();
+    stack.undo();
+    stack.undo();
+    stack.undo();
+    QVERIFY(project.tracks[0].clips[0].samples == recorded);
 }
 
 QTEST_GUILESS_MAIN(TestCommands)

@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "SampleBuffer.h"
+
 namespace zrecord {
 
 enum class AudioFormat { Wav, Flac, OggVorbis, Mp3 };
@@ -23,7 +25,7 @@ public:
     // sample exactly, including values beyond +/-1.0 that gain or effects can
     // produce. (Integer PCM cannot hold those; see write().)
     static bool writeFloatWav(const std::string& path,
-                               const std::vector<float>& interleaved,
+                               const SampleBuffer& interleaved,
                                int sampleRate,
                                int channels,
                                std::string& errorMessage);

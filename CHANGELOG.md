@@ -31,6 +31,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Closing the window with undo history no longer touches freed memory.** The
   undo stack was torn down after the window's other members, and its last
   change notification ran against the half-destroyed window.
+- **Edits no longer duplicate the whole track.** Every edit used to keep two
+  full copies of the track's audio for undo, so a 0.1 s edit on a 10-minute
+  stereo take cost ~440 MB. Clip audio is now stored in shared, immutable
+  chunks: undo snapshots copy only clip headers and an edit copies only the
+  chunks it touches (~1 MB per small edit; the 10-minute take itself now
+  costs 238 MB instead of 675 MB).
 
 ## [0.2.0]
 

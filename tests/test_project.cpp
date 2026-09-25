@@ -12,12 +12,13 @@ Clip makeRamp(int64_t startFrame, int64_t frameCount, float firstValue = 1.0f, i
     Clip clip;
     clip.channels = channels;
     clip.startFrame = startFrame;
-    clip.samples.resize(static_cast<size_t>(frameCount) * static_cast<size_t>(channels));
+    std::vector<float> samples(static_cast<size_t>(frameCount) * static_cast<size_t>(channels));
     for (int64_t f = 0; f < frameCount; ++f) {
         for (int c = 0; c < channels; ++c) {
-            clip.samples[static_cast<size_t>(f) * channels + c] = firstValue + static_cast<float>(f);
+            samples[static_cast<size_t>(f) * channels + c] = firstValue + static_cast<float>(f);
         }
     }
+    clip.samples = samples;
     clip.peaks.build(clip.samples, channels);
     return clip;
 }
@@ -138,7 +139,7 @@ void TestProject::copyRange_readsWithoutModifying() {
     Track track;
     track.clips.push_back(makeRamp(0, 6));
     const size_t clipCountBefore = track.clips.size();
-    const std::vector<float> samplesBefore = track.clips[0].samples;
+    const std::vector<float> samplesBefore = track.clips[0].samples.toVector();
 
     std::vector<float> copied = Project::copyRange(track, 2, 5, 1);
 
@@ -347,7 +348,7 @@ void TestProject::crossfadeClips_holdsEqualPowerAcrossTheJoin() {
         track.clips.push_back(std::move(a));
         track.clips.push_back(std::move(b));
         Project::crossfadeClips(track, 0, 6, 1);
-        return track.clips[0].samples;
+        return track.clips[0].samples.toVector();
     };
 
     const std::vector<float> outgoing = rampFor(1.0f, 0.0f);

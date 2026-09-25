@@ -5,7 +5,10 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <memory>
 #include <vector>
+
+#include "SampleBuffer.h"
 
 namespace zrecord {
 
@@ -16,7 +19,7 @@ public:
     static constexpr int64_t kBlockFrames = 256;
 
     // (Re)builds the cache from `samples` (interleaved, `channels` wide).
-    void build(const std::vector<float>& samples, int channels);
+    void build(const SampleBuffer& samples, int channels);
     void invalidate();
 
     struct MinMax {
@@ -28,19 +31,21 @@ public:
     // [blockIndex*kBlockFrames, (blockIndex+1)*kBlockFrames) ). Valid only
     // after build().
     MinMax blockAt(int64_t blockIndex) const;
-    int64_t blockCount() const { return static_cast<int64_t>(blocks_.size()); }
+    int64_t blockCount() const { return blocks_ ? static_cast<int64_t>(blocks_->size()) : 0; }
     bool isBuilt() const { return built_; }
 
 private:
-    std::vector<MinMax> blocks_;
+    // Shared and immutable, like the samples, so copying a clip for an undo
+    // snapshot doesn't copy its peaks either.
+    std::shared_ptr<const std::vector<MinMax>> blocks_;
     bool built_ = false;
 };
 
 // One contiguous span of recorded/imported audio, placed on a track's
-// timeline at startFrame. Clips own their samples in memory (matching the
-// original single-buffer design, just split per-clip).
+// timeline at startFrame. The samples are shared, immutable chunks (see
+// SampleBuffer), so copying a Clip is cheap and never copies audio.
 struct Clip {
-    std::vector<float> samples; // interleaved, `channels` wide
+    SampleBuffer samples; // interleaved, `channels` wide
     int64_t startFrame = 0;
     int channels = 1;
     PeakCache peaks;
@@ -150,7 +155,7 @@ public:
     static std::vector<float> removeRange(Track& track, int64_t startFrame, int64_t endFrame, int channels);
 
     // Inserts `samples` at `atFrame` on `track`, rippling later clips right.
-    static void insertRange(Track& track, int64_t atFrame, const std::vector<float>& samples, int channels);
+    static void insertRange(Track& track, int64_t atFrame, const SampleBuffer& samples, int channels);
 
     // Zeroes [startFrame, endFrame) in place; track length is unchanged.
     static void silenceRange(Track& track, int64_t startFrame, int64_t endFrame, int channels);
@@ -167,7 +172,7 @@ public:
     static void writeRange(Track& track, int64_t startFrame, int64_t endFrame, const std::vector<float>& samples, int channels);
 
     // Appends `samples` as a new clip at the track's current end.
-    static void appendClip(Track& track, const std::vector<float>& samples, int channels);
+    static void appendClip(Track& track, const SampleBuffer& samples, int channels);
 
     // Merges clips `firstClipIndex` and the one after it into a single clip,
     // overlapping them by `frames` and mixing that overlap with equal-power
