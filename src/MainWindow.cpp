@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "NormalizeDialog.h"
+#include "PeakMeter.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -20,7 +21,6 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProcess>
-#include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSlider>
@@ -310,9 +310,7 @@ void MainWindow::buildUi() {
 
     // Level meter + track timeline.
     auto* meterRow = new QHBoxLayout();
-    levelMeter_ = new QProgressBar();
-    levelMeter_->setRange(0, 100);
-    levelMeter_->setTextVisible(false);
+    levelMeter_ = new PeakMeter();
     meterRow->addWidget(levelMeter_, 1);
     statusLabel_ = new QLabel("Ready");
     meterRow->addWidget(statusLabel_);
@@ -1398,8 +1396,8 @@ void MainWindow::onSelectionChanged() {
 }
 
 void MainWindow::onTick() {
-    float peak = engine_->peakLevel();
-    levelMeter_->setValue(static_cast<int>(std::min(1.0f, peak) * 100.0f));
+    // Input while recording, output while playing; otherwise it falls away.
+    levelMeter_->setPeak(engine_->takeMeterPeak());
 
     if (engine_->isRecording()) {
         double captured = engine_->capturedSeconds();

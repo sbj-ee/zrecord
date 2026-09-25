@@ -1,5 +1,6 @@
 #include <QComboBox>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QUndoStack>
 #include <QtTest>
@@ -12,6 +13,7 @@
 #include "SavedProjectPaths.h"
 #include "TrackPanel.h"
 #include "NormalizeDialog.h"
+#include "PeakMeter.h"
 
 using namespace zrecord;
 
@@ -67,6 +69,9 @@ private slots:
     void normalizeDialogFlagsClipping();
     void normalizeSelectionIsOneUndoStep();
     void amplifySelectedClips();
+    void peakMeterBallisticsAndHold();
+    void peakMeterClipLedLatchesUntilClicked();
+    void mainWindowMetersPlayback();
 
 private:
     Project project_;
@@ -865,6 +870,68 @@ void TestGui::amplifySelectedClips() {
     QVERIFY(std::fabs(project->tracks[0].clips[0].samples[0] - 0.1f * dbToLinear(6.0f)) < 1e-5f);
     QVERIFY(std::fabs(project->tracks[1].clips[0].samples[39999] - 0.2f * dbToLinear(6.0f)) < 1e-5f);
     QCOMPARE(window.findChild<QUndoStack*>()->undoText(), QString("Amplify"));
+}
+
+void TestGui::peakMeterBallisticsAndHold() {
+    PeakMeter meter;
+    meter.setPeakAt(0.5f, 0); // -6 dBFS
+    QVERIFY(std::fabs(meter.levelDb() + 6.02f) < 0.01f);
+    QVERIFY(std::fabs(meter.holdDb() + 6.02f) < 0.01f);
+
+    // Silence: the bar falls at 24 dB/s, the hold marker stays put...
+    meter.setPeakAt(0.0f, 500);
+    QVERIFY(std::fabs(meter.levelDb() + 18.02f) < 0.01f);
+    QVERIFY(std::fabs(meter.holdDb() + 6.02f) < 0.01f);
+    meter.setPeakAt(0.0f, 1400);
+    QVERIFY(std::fabs(meter.holdDb() + 6.02f) < 0.01f);
+    // ...until the hold time has passed.
+    meter.setPeakAt(0.0f, 2000);
+    QVERIFY(meter.holdDb() < -6.5f);
+    // A louder peak takes over the hold at once.
+    meter.setPeakAt(0.25f, 2050);
+    meter.setPeakAt(0.7f, 2100);
+    QVERIFY(std::fabs(meter.holdDb() + 3.1f) < 0.01f);
+    QVERIFY(!meter.clipLit());
+    // It bottoms out at the floor.
+    meter.setPeakAt(0.0f, 60000);
+    QCOMPARE(meter.levelDb(), PeakMeter::kFloorDb);
+}
+
+void TestGui::peakMeterClipLedLatchesUntilClicked() {
+    PeakMeter meter;
+    meter.resize(400, 30);
+    QSignalSpy reset(&meter, &PeakMeter::clipReset);
+    meter.setPeakAt(0.99f, 0);
+    QVERIFY(!meter.clipLit());
+    meter.setPeakAt(1.0f, 50); // 0 dBFS counts
+    QVERIFY(meter.clipLit());
+    for (int t = 100; t < 10000; t += 100) {
+        meter.setPeakAt(0.1f, t);
+    }
+    QVERIFY(meter.clipLit()); // still lit long after
+    QTest::mouseClick(&meter, Qt::LeftButton, Qt::NoModifier, QPoint(390, 10));
+    QVERIFY(!meter.clipLit());
+    QCOMPARE(reset.count(), 1);
+}
+
+void TestGui::mainWindowMetersPlayback() {
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    PeakMeter* meter = window.findChild<PeakMeter*>();
+    QVERIFY(meter != nullptr);
+    QVERIFY(window.findChild<QProgressBar*>() == nullptr); // the old linear bar is gone
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    Track track;
+    track.clips.push_back(makeClip(0, 400000, 0.5f));
+    project->tracks.push_back(std::move(track));
+
+    findButton(window, "▶  Play")->click();
+    fake->setMeterPeak(0.5f);
+    QTRY_VERIFY(meter->holdDb() > -6.1f);
+    QVERIFY(!meter->clipLit());
+    fake->setMeterPeak(1.3f);
+    QTRY_VERIFY(meter->clipLit());
 }
 
 QTEST_MAIN(TestGui)

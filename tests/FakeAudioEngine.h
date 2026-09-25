@@ -2,6 +2,8 @@
 
 #include "AudioEngineInterface.h"
 
+#include <utility>
+
 namespace zrecord {
 
 // An AudioEngineInterface that touches no hardware. Recording and playback are
@@ -57,7 +59,8 @@ public:
     void setFilterSettings(const FilterSettings& settings) override { settings_ = settings; }
     FilterSettings settings() const { return settings_; }
 
-    float peakLevel() const override { return 0.0f; }
+    float takeMeterPeak() override { return std::exchange(meterPeak_, 0.0f); }
+    void setMeterPeak(float peak) { meterPeak_ = peak; }
     double capturedSeconds() const override { return 0.0; }
     std::vector<float> copyCapturedBuffer() const override { return captured_; }
     std::vector<float> consumeNewSamples() override { return {}; }
@@ -81,6 +84,7 @@ private:
     int refreshCalls_ = 0;
     int64_t playbackFrame_ = 0;
     int64_t lastSeek_ = -1;
+    float meterPeak_ = 0.0f;
     FilterSettings settings_;
     std::vector<float> captured_;
 };

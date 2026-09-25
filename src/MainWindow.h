@@ -12,7 +12,6 @@ class QAction;
 class QComboBox;
 class QPushButton;
 class QToolButton;
-class QProgressBar;
 class QLabel;
 class QCheckBox;
 class QSlider;
@@ -201,7 +200,7 @@ private:
     QToolButton* recordingStopButton_ = nullptr;
     QToolButton* recordingMuteButton_ = nullptr;
 
-    QProgressBar* levelMeter_ = nullptr;
+    class PeakMeter* levelMeter_ = nullptr;
     QLabel* statusLabel_ = nullptr;
     TrackPanel* trackPanel_ = nullptr;
 

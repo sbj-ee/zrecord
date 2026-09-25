@@ -49,6 +49,7 @@ add_library(zrecord_gui STATIC
     src/MainWindow.cpp
     src/TrackPanel.cpp
     src/NormalizeDialog.cpp
+    src/PeakMeter.cpp
 )
 
 target_link_libraries(zrecord_gui PUBLIC zrecord_core)

@@ -59,7 +59,7 @@ public:
     void setFilterSettings(const FilterSettings& settings) override;
     FilterSettings filterSettings() const;
 
-    float peakLevel() const override;
+    float takeMeterPeak() override;
     double capturedSeconds() const override;
     size_t capturedFrameCount() const;
 
@@ -123,7 +123,8 @@ private:
     std::atomic<int64_t> seekRequest_{-1}; // UI -> audio thread; -1 = none
     std::atomic<bool> playbackFinished_{false}; // set by the audio thread at the end
 
-    std::atomic<float> peakLevel_{0.0f};
+    std::atomic<float> meterPeak_{0.0f}; // max since the UI last took it
+    void raiseMeterPeak(float peak);
     std::atomic<bool> recording_{false};
     std::atomic<bool> inputMuted_{false};
 

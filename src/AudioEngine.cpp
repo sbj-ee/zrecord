@@ -116,7 +116,7 @@ void AudioEngine::stopRecording() {
         inputStream_ = nullptr;
     }
     recording_ = false;
-    peakLevel_.store(0.0f, std::memory_order_relaxed);
+    meterPeak_.store(0.0f, std::memory_order_relaxed);
 }
 
 bool AudioEngine::isRecording() const {
@@ -259,8 +259,15 @@ bool AudioEngine::capturedOverrun() const {
     return captureRing_.overran();
 }
 
-float AudioEngine::peakLevel() const {
-    return peakLevel_.load(std::memory_order_relaxed);
+float AudioEngine::takeMeterPeak() {
+    return meterPeak_.exchange(0.0f, std::memory_order_relaxed);
+}
+
+void AudioEngine::raiseMeterPeak(float peak) {
+    // Lock-free max; called from the audio callbacks.
+    float current = meterPeak_.load(std::memory_order_relaxed);
+    while (peak > current && !meterPeak_.compare_exchange_weak(current, peak, std::memory_order_relaxed)) {
+    }
 }
 
 double AudioEngine::capturedSeconds() const {
@@ -340,7 +347,7 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
     filterChain_.process(scratch_, frameCount);
     captureRing_.write(scratch_.data(), needed);
 
-    peakLevel_.store(peak, std::memory_order_relaxed);
+    raiseMeterPeak(peak);
     return paContinue;
 }
 
@@ -352,6 +359,12 @@ int AudioEngine::handleOutput(float* output, unsigned long frameCount) {
         playbackPos_ = static_cast<size_t>(seek);
     }
     bool more = mixer_.render(static_cast<int64_t>(playbackPos_), output, frameCount, playbackChannels_);
+    float peak = 0.0f;
+    const size_t samples = static_cast<size_t>(frameCount) * static_cast<size_t>(playbackChannels_);
+    for (size_t i = 0; i < samples; ++i) {
+        peak = std::max(peak, std::fabs(output[i]));
+    }
+    raiseMeterPeak(peak);
     playbackPos_ += frameCount;
     playbackFrame_.store(static_cast<int64_t>(playbackPos_), std::memory_order_relaxed);
     if (!more) {

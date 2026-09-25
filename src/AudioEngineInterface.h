@@ -50,7 +50,11 @@ public:
 
     virtual void setFilterSettings(const FilterSettings& settings) = 0;
 
-    virtual float peakLevel() const = 0;
+    // The largest |sample| since the previous call: the raw input while
+    // recording, the mixed output while playing. Drives the level meter;
+    // taking the maximum since the last read means a clipped block between
+    // two UI ticks still registers.
+    virtual float takeMeterPeak() = 0;
     virtual double capturedSeconds() const = 0;
     virtual std::vector<float> copyCapturedBuffer() const = 0;
     virtual std::vector<float> consumeNewSamples() = 0;

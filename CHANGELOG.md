@@ -19,6 +19,13 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by a fixed gain in dB. It is one undo step. The dialog shows the current
   and resulting peak. If the result would pass full scale, a red CLIP
   indicator appears and OK needs "Allow clipping".
+- **dB peak meter.** It replaces the linear level bar and reads -60 to
+  +3 dBFS, with green, amber and red zones. The bar falls back smoothly,
+  and a peak-hold marker with a readout keeps the recent maximum for
+  1.5 s. A CLIP light comes on at 0 dBFS and stays lit until you click the
+  meter. It shows the input while recording and the mix while playing.
+  Peaks are taken as the maximum since the last screen update, so a brief
+  over can't slip between updates.
 
 ### Fixed
 

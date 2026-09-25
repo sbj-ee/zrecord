@@ -51,6 +51,7 @@ private slots:
     void naturalEndReleasesTheProject();
     void playbackRunsWhileTheUiHoldsTheProjectMutex();
     void seekJumpsRunningPlayback();
+    void playbackFeedsTheMeter();
 
 private:
     QTemporaryDir home_;
@@ -142,6 +143,22 @@ void TestAudioEngine::seekJumpsRunningPlayback() {
     QVERIFY2(waitUntilIdle(*engine_, 3000), "playback didn't jump to the seek point");
     QVERIFY(engine_->playbackFrame() >= 441000);
     engine_->stopPlayback();
+}
+
+void TestAudioEngine::playbackFeedsTheMeter() {
+    // The meter shows playback as well as recording input.
+    Project project;
+    fill(project, 4410); // 0.1 amplitude
+    project.tracks[0].clips[0].samples.fill(100, 1, -0.8f);
+    engine_->takeMeterPeak(); // drop anything left over
+    std::string error;
+    if (!engine_->startPlayback(project, error)) {
+        QSKIP(qPrintable(QString("no usable output device: %1").arg(QString::fromStdString(error))));
+    }
+    QVERIFY(waitUntilIdle(*engine_));
+    engine_->stopPlayback();
+    QCOMPARE(engine_->takeMeterPeak(), 0.8f); // the loudest sample, even if brief
+    QCOMPARE(engine_->takeMeterPeak(), 0.0f); // taken
 }
 
 QTEST_GUILESS_MAIN(TestAudioEngine)
