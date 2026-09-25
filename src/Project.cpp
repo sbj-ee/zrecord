@@ -321,7 +321,9 @@ void Project::reset() {
 }
 
 int64_t Project::lengthFrames() const {
-    std::lock_guard<std::mutex> lock(mutex);
+    // No lock: callers are on the UI thread, which is where every mutation
+    // happens. Locking here made the timeline's layout (scroll range, zoom
+    // to fit) wait on anyone holding the mutex, e.g. a snapshot or a save.
     int64_t end = 0;
     for (const auto& track : tracks) {
         end = std::max(end, track.endFrame());

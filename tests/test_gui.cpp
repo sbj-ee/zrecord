@@ -5,6 +5,9 @@
 #include <QUndoStack>
 #include <QtTest>
 
+#include <atomic>
+#include <thread>
+
 #include "FakeAudioEngine.h"
 #include "MainWindow.h"
 #include "AudioFileWriter.h"
@@ -72,6 +75,7 @@ private slots:
     void peakMeterBallisticsAndHold();
     void peakMeterClipLedLatchesUntilClicked();
     void mainWindowMetersPlayback();
+    void repaintDoesNotWaitForTheProjectMutex();
 
 private:
     Project project_;
@@ -932,6 +936,39 @@ void TestGui::mainWindowMetersPlayback() {
     QVERIFY(!meter->clipLit());
     fake->setMeterPeak(1.3f);
     QTRY_VERIFY(meter->clipLit());
+}
+
+void TestGui::repaintDoesNotWaitForTheProjectMutex() {
+    // From the review's repro_lock: paintEvent held project.mutex for a
+    // whole repaint (~450 ms with two spectrogram tracks), which is what
+    // stalled playback. Paint runs on the UI thread, where every writer
+    // lives, so it needs no lock; here another thread holds the mutex for
+    // 3 s and a full repaint (waveform and spectrogram) must not wait for it.
+    for (Track& track : project_.tracks) {
+        track.display = TrackDisplay::Spectrogram;
+    }
+    project_.tracks[1].clips.push_back(makeClip(0, 40000, 0.3f));
+    panel_.refresh();
+
+    std::atomic<bool> locked{false};
+    std::thread holder([this, &locked] {
+        std::lock_guard<std::mutex> lock(project_.mutex);
+        locked = true;
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    });
+    while (!locked) {
+        std::this_thread::yield();
+    }
+    QElapsedTimer timer;
+    timer.start();
+    QImage image = panel_.grab().toImage();
+    const qint64 elapsed = timer.elapsed();
+    holder.join();
+    QVERIFY(!image.isNull());
+    QVERIFY2(elapsed < 2000, qPrintable(QString("repaint waited %1 ms for the project mutex").arg(elapsed)));
+    for (Track& track : project_.tracks) {
+        track.display = TrackDisplay::Waveform;
+    }
 }
 
 QTEST_MAIN(TestGui)

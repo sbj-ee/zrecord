@@ -140,6 +140,7 @@ public:
     int64_t playheadFrame = 0;
     std::vector<float> clipboard; // interleaved, `channels` wide
 
+    // UI thread only (takes no lock).
     int64_t lengthFrames() const;
 
     // Resets to an empty single project in place (Project holds a mutex, so
