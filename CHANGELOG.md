@@ -7,6 +7,14 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Saved projects no longer corrupt loud audio.** Clips were stored as 24-bit
+  PCM without clipping, so any sample past full scale (after gain or echo)
+  wrapped around on save: 1.2 reopened as -0.8. Project clips are now stored as
+  32-bit float WAV, which reopens exactly; projects saved as 24-bit still load.
+  Integer-PCM exports (WAV/FLAC) now clip instead of wrapping.
+
 ## [0.2.0]
 
 zrecord became a multi-track editor. 0.1.0 recorded into a single buffer and

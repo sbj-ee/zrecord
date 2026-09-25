@@ -51,9 +51,13 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
             QString relativeFile = QString("audio/track%1_clip%2.wav").arg(t).arg(c);
             QString absoluteFile = dir.filePath(relativeFile);
 
-            if (!AudioFileWriter::write(absoluteFile.toStdString(), clip.samples,
-                                         static_cast<int>(project.sampleRate), clip.channels,
-                                         AudioFormat::Wav, errorMessage)) {
+            // Float, not 24-bit PCM: a project must reopen exactly as saved,
+            // and clips can legitimately exceed +/-1.0 (gain, echo) -- only
+            // the final mixdown is clamped. Older projects saved as 24-bit
+            // still load; the reader takes whatever the file holds.
+            if (!AudioFileWriter::writeFloatWav(absoluteFile.toStdString(), clip.samples,
+                                                 static_cast<int>(project.sampleRate), clip.channels,
+                                                 errorMessage)) {
                 return false;
             }
 

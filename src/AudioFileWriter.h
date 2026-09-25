@@ -19,6 +19,15 @@ public:
                        AudioFormat format,
                        std::string& errorMessage);
 
+    // Lossless storage for project clips: 32-bit float WAV keeps every
+    // sample exactly, including values beyond +/-1.0 that gain or effects can
+    // produce. (Integer PCM cannot hold those; see write().)
+    static bool writeFloatWav(const std::string& path,
+                               const std::vector<float>& interleaved,
+                               int sampleRate,
+                               int channels,
+                               std::string& errorMessage);
+
     static const char* extensionFor(AudioFormat format);
     static const char* nameFor(AudioFormat format);
 };

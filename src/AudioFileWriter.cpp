@@ -23,17 +23,15 @@ int sfFormatFor(AudioFormat format) {
 
 } // namespace
 
-bool AudioFileWriter::write(const std::string& path,
-                             const std::vector<float>& interleaved,
-                             int sampleRate,
-                             int channels,
-                             AudioFormat format,
-                             std::string& errorMessage) {
+namespace {
+
+bool writeWithFormat(const std::string& path, const std::vector<float>& interleaved, int sampleRate,
+                     int channels, int sfFormat, std::string& errorMessage) {
     SF_INFO info;
     std::memset(&info, 0, sizeof(info));
     info.samplerate = sampleRate;
     info.channels = channels;
-    info.format = sfFormatFor(format);
+    info.format = sfFormat;
 
     if (!sf_format_check(&info)) {
         errorMessage = "Unsupported format/sample-rate/channel combination";
@@ -46,6 +44,13 @@ bool AudioFileWriter::write(const std::string& path,
         return false;
     }
 
+    // Without this, libsndfile converts out-of-range floats to integer PCM by
+    // plain overflow: 1.2 comes back as -0.8. Clipping is the only sane
+    // behaviour for an integer target. (Float targets are unaffected.)
+    if ((sfFormat & SF_FORMAT_SUBMASK) != SF_FORMAT_FLOAT) {
+        sf_command(file, SFC_SET_CLIPPING, nullptr, SF_TRUE);
+    }
+
     sf_count_t frameCount = channels > 0
         ? static_cast<sf_count_t>(interleaved.size() / static_cast<size_t>(channels))
         : 0;
@@ -56,8 +61,31 @@ bool AudioFileWriter::write(const std::string& path,
         errorMessage = sf_strerror(file);
     }
 
-    sf_close(file);
+    if (sf_close(file) != 0 && ok) {
+        errorMessage = "Could not finish writing the file";
+        ok = false;
+    }
     return ok;
+}
+
+} // namespace
+
+bool AudioFileWriter::write(const std::string& path,
+                             const std::vector<float>& interleaved,
+                             int sampleRate,
+                             int channels,
+                             AudioFormat format,
+                             std::string& errorMessage) {
+    return writeWithFormat(path, interleaved, sampleRate, channels, sfFormatFor(format), errorMessage);
+}
+
+bool AudioFileWriter::writeFloatWav(const std::string& path,
+                                     const std::vector<float>& interleaved,
+                                     int sampleRate,
+                                     int channels,
+                                     std::string& errorMessage) {
+    return writeWithFormat(path, interleaved, sampleRate, channels, SF_FORMAT_WAV | SF_FORMAT_FLOAT,
+                           errorMessage);
 }
 
 const char* AudioFileWriter::extensionFor(AudioFormat format) {
