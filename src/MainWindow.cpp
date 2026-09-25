@@ -1185,9 +1185,9 @@ void MainWindow::onSelectAll() {
     onSelectionChanged();
 }
 
-void MainWindow::onEnvelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& points,
-                                   const QString& what) {
-    undoStack_->push(new EnvelopeEditCommand(project_, trackIndex, points, what));
+void MainWindow::onEnvelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& before,
+                                   const std::vector<EnvelopePoint>& after, const QString& what) {
+    undoStack_->push(new EnvelopeEditCommand(project_, trackIndex, before, after, what));
     trackPanel_->update();
 }
 

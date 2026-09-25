@@ -55,7 +55,8 @@ private slots:
     void onCrossfade();
     void onApplyEffect();
     void onSelectAll();
-    void onEnvelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& points, const QString& what);
+    void onEnvelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& before,
+                          const std::vector<EnvelopePoint>& after, const QString& what);
     void onSelectionChanged();
     void onClipsMoveRequested(const std::vector<ClipMove>& moves);
     void onAddLabel();

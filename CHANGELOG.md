@@ -49,6 +49,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (new dependency), and the status bar says so. Opening a project likewise
   resamples any clip stored at another rate. A rejected import (channel
   mismatch) no longer leaves an empty "Imported" track behind.
+- **Envelope drags can be undone.** Undo after dragging an envelope point
+  left the point where it was dragged to, and a single click added two undo
+  steps. Each press-drag-release is now exactly one undo step (none if the
+  point didn't move).
 
 ## [0.2.0]
 

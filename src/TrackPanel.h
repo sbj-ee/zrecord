@@ -86,7 +86,9 @@ signals:
 
     // A finished envelope edit: the track's complete new point list, which
     // MainWindow turns into one undoable step.
-    void envelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& points, const QString& what);
+    // One finished envelope gesture: the curve before it and after it.
+    void envelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& before,
+                        const std::vector<EnvelopePoint>& after, const QString& what);
 
     // Label interactions. As with clip moves, the panel doesn't mutate the
     // project or raise dialogs itself -- MainWindow owns both.
@@ -194,10 +196,14 @@ private:
     ClipDrag clipDrag_;
 
     // In-flight envelope point drag.
+    // A press-drag-release on the envelope. The curve is edited live while
+    // dragging; release turns the whole gesture into one undo step.
     struct EnvelopeDrag {
         bool active = false;
         int trackIndex = -1;
         int pointIndex = -1;
+        bool addedPoint = false; // the press created the point
+        std::vector<EnvelopePoint> before;
     };
     EnvelopeDrag envelopeDrag_;
 

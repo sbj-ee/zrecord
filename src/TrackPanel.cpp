@@ -935,30 +935,30 @@ void TrackPanel::mousePressEvent(QMouseEvent* event) {
             if (existing >= 0) {
                 std::vector<EnvelopePoint> points = track.envelope;
                 points.erase(points.begin() + existing);
-                emit envelopeEdited(lane, points, "Delete Envelope Point");
+                emit envelopeEdited(lane, track.envelope, points, "Delete Envelope Point");
             }
             return;
         }
 
+        envelopeDrag_ = EnvelopeDrag{};
+        envelopeDrag_.active = true;
+        envelopeDrag_.trackIndex = lane;
+        envelopeDrag_.before = track.envelope; // what Undo goes back to
+
         if (existing >= 0) {
-            envelopeDrag_.active = true;
-            envelopeDrag_.trackIndex = lane;
             envelopeDrag_.pointIndex = existing;
             return;
         }
 
-        // Clicking empty lane adds a point where the cursor is.
+        // Clicking empty lane adds a point where the cursor is. It's added
+        // live and committed on release, together with any drag that follows,
+        // as one "Add Envelope Point" step.
         EnvelopePoint point;
         point.frame = std::max<int64_t>(0, frameAtX(event->pos().x()));
         point.gain = gainForY(laneTop, event->pos().y());
-        std::vector<EnvelopePoint> points = track.envelope;
-        Track scratch;
-        scratch.envelope = points;
-        int index = scratch.insertEnvelopePoint(point);
-        emit envelopeEdited(lane, scratch.envelope, "Add Envelope Point");
-        envelopeDrag_.active = true;
-        envelopeDrag_.trackIndex = lane;
-        envelopeDrag_.pointIndex = index;
+        envelopeDrag_.pointIndex = track.insertEnvelopePoint(point);
+        envelopeDrag_.addedPoint = true;
+        update();
         return;
     }
 
@@ -1076,12 +1076,21 @@ void TrackPanel::mouseMoveEvent(QMouseEvent* event) {
 
 void TrackPanel::mouseReleaseEvent(QMouseEvent*) {
     if (envelopeDrag_.active) {
-        int trackIndex = envelopeDrag_.trackIndex;
+        EnvelopeDrag drag = std::move(envelopeDrag_);
         envelopeDrag_ = EnvelopeDrag{};
-        if (project_ != nullptr && trackIndex >= 0 &&
-            trackIndex < static_cast<int>(project_->tracks.size())) {
-            emit envelopeEdited(trackIndex, project_->tracks[static_cast<size_t>(trackIndex)].envelope,
-                                 "Move Envelope Point");
+        if (project_ != nullptr && drag.trackIndex >= 0 &&
+            drag.trackIndex < static_cast<int>(project_->tracks.size())) {
+            const auto& after = project_->tracks[static_cast<size_t>(drag.trackIndex)].envelope;
+            bool changed = after.size() != drag.before.size() ||
+                           !std::equal(after.begin(), after.end(), drag.before.begin(),
+                                       [](const EnvelopePoint& a, const EnvelopePoint& b) {
+                                           return a.frame == b.frame && a.gain == b.gain;
+                                       });
+            // A click on a point that doesn't move it is not an edit.
+            if (changed) {
+                emit envelopeEdited(drag.trackIndex, drag.before, after,
+                                     drag.addedPoint ? "Add Envelope Point" : "Move Envelope Point");
+            }
         }
         update();
         return;

@@ -1,9 +1,11 @@
 #include <QPushButton>
+#include <QUndoStack>
 #include <QtTest>
 
 #include "FakeAudioEngine.h"
 #include "MainWindow.h"
 #include "AudioFileWriter.h"
+#include "Commands.h"
 #include "ProjectFile.h"
 #include "TrackPanel.h"
 
@@ -50,6 +52,7 @@ private slots:
     void spectrogramRepaintsReuseCachedTiles();
     void mainWindowRefreshesPlaybackWhilePlaying();
     void mainWindowImportResamplesToTheProjectRate();
+    void envelopeDragIsOneUndoableStep();
 
 private:
     Project project_;
@@ -458,6 +461,48 @@ void TestGui::mainWindowImportResamplesToTheProjectRate() {
     QVERIFY(!window.importAudioFile(stereo, &message));
     QCOMPARE(project->tracks.size(), size_t(1));
     QCOMPARE(project->tracks[0].clips.size(), size_t(2));
+}
+
+void TestGui::envelopeDragIsOneUndoableStep() {
+    // Regression: the drag mutated the envelope live and the command captured
+    // "before" at push time (after the drag), so Undo restored nothing; and a
+    // plain click pushed two steps (Add on press, Move on release).
+    QUndoStack stack;
+    connect(&panel_, &TrackPanel::envelopeEdited, &stack,
+            [&](int track, const std::vector<EnvelopePoint>& before, const std::vector<EnvelopePoint>& after,
+                const QString& what) { stack.push(new EnvelopeEditCommand(project_, track, before, after, what)); });
+    panel_.setTool(TrackPanel::Tool::Envelope);
+    const int x = TrackPanel::kHeaderWidth + 200;
+    const int top = TrackPanel::lanesTop();
+
+    QTest::mouseClick(&panel_, Qt::LeftButton, {}, QPoint(x, top + 20));
+    QCOMPARE(project_.tracks[0].envelope.size(), size_t(1));
+    QCOMPARE(stack.count(), 1);
+    QCOMPARE(stack.text(0), QString("Add Envelope Point"));
+    const float added = project_.tracks[0].envelope[0].gain;
+
+    QTest::mousePress(&panel_, Qt::LeftButton, {}, QPoint(x, top + 20));
+    QMouseEvent move(QEvent::MouseMove, QPointF(x, top + 70), panel_.mapToGlobal(QPointF(x, top + 70)),
+                     Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&panel_, &move);
+    QTest::mouseRelease(&panel_, Qt::LeftButton, {}, QPoint(x, top + 70));
+    QCOMPARE(stack.count(), 2);
+    QCOMPARE(stack.text(1), QString("Move Envelope Point"));
+    QVERIFY(project_.tracks[0].envelope[0].gain < added);
+
+    stack.undo();
+    QCOMPARE(project_.tracks[0].envelope[0].gain, added);
+    stack.undo();
+    QVERIFY(project_.tracks[0].envelope.empty());
+    stack.redo();
+    stack.redo();
+    QVERIFY(project_.tracks[0].envelope[0].gain < added);
+
+    // Clicking the point (now at y = top + 70) without moving it is not an edit.
+    const int count = stack.count();
+    QTest::mouseClick(&panel_, Qt::LeftButton, {}, QPoint(x, top + 70));
+    QCOMPARE(stack.count(), count);
+    panel_.disconnect(&stack);
 }
 
 QTEST_MAIN(TestGui)

@@ -176,8 +176,11 @@ private:
 // shifts when a point is inserted or removed.
 class EnvelopeEditCommand : public QUndoCommand {
 public:
-    EnvelopeEditCommand(Project& project, int trackIndex, std::vector<EnvelopePoint> after,
-                         const QString& text);
+    // Both states are passed in: the panel edits the envelope live during a
+    // drag, so by the time the command is pushed the track already holds
+    // `after` and can't tell us what it was before.
+    EnvelopeEditCommand(Project& project, int trackIndex, std::vector<EnvelopePoint> before,
+                         std::vector<EnvelopePoint> after, const QString& text);
 
     void undo() override;
     void redo() override;
@@ -187,7 +190,6 @@ private:
     int trackIndex_;
     std::vector<EnvelopePoint> before_;
     std::vector<EnvelopePoint> after_;
-    bool captured_ = false;
 };
 
 class MoveClipsCommand : public QUndoCommand {
