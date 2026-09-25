@@ -1,0 +1,82 @@
+name: Release
+
+# Pushing a tag v<version> builds, tests and packages that commit and
+# publishes a GitHub Release with the .deb attached. Nothing else triggers
+# it. The tag must match project(... VERSION ...) in CMakeLists.txt.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            dpkg-dev \
+            qt6-base-dev \
+            portaudio19-dev \
+            libsndfile1-dev \
+            libsamplerate0-dev
+
+      - name: Check the tag matches the project version
+        id: version
+        run: |
+          version=$(sed -n 's/^project(zrecord .*VERSION \([0-9][0-9.]*\)).*/\1/p' CMakeLists.txt)
+          if [ -z "$version" ]; then
+            echo "::error::could not read the project version from CMakeLists.txt"; exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match project version $version"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # ZRECORD_RELEASE drops the +g<sha> development suffix.
+      - name: Configure
+        run: cmake -S . -B build -DZRECORD_RELEASE=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror"
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Package (.deb)
+        working-directory: build
+        run: |
+          cpack -G DEB
+          deb=$(ls *.deb)
+          dpkg-deb -f "$deb" Package Version Depends Recommends
+          test "$(dpkg-deb -f "$deb" Version)" = "${{ steps.version.outputs.version }}"
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          # The "## [<version>]" section, up to the next "## [" heading.
+          awk -v v="${{ steps.version.outputs.version }}" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for ${{ steps.version.outputs.version }}"; exit 1
+          fi
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/*.deb \
+            --title "zrecord ${{ steps.version.outputs.version }}" \
+            --notes-file release-notes.md \
+            --verify-tag
