@@ -7,6 +7,44 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# Version string. Untagged builds get a development suffix so a .deb or an
+# About box can't be mistaken for the release: 0.2.0+g<short sha>.
+option(ZRECORD_RELEASE "Release build: plain version, no development suffix" OFF)
+set(ZRECORD_VERSION "${PROJECT_VERSION}")
+if(NOT ZRECORD_RELEASE)
+    find_package(Git QUIET)
+    set(zrecord_on_tag FALSE)
+    set(zrecord_sha "")
+    if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+        execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --exact-match --match "v${PROJECT_VERSION}" HEAD
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                        RESULT_VARIABLE zrecord_tag_rc OUTPUT_QUIET ERROR_QUIET)
+        if(zrecord_tag_rc EQUAL 0)
+            set(zrecord_on_tag TRUE)
+        endif()
+        execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --short=7 HEAD
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                        OUTPUT_VARIABLE zrecord_sha OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        # Re-run this when HEAD moves, so the suffix follows new commits.
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/.git/HEAD")
+        execute_process(COMMAND "${GIT_EXECUTABLE}" symbolic-ref -q HEAD
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                        OUTPUT_VARIABLE zrecord_head_ref OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(zrecord_head_ref AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git/${zrecord_head_ref}")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/.git/${zrecord_head_ref}")
+        endif()
+    endif()
+    if(NOT zrecord_on_tag)
+        if(zrecord_sha)
+            set(ZRECORD_VERSION "${PROJECT_VERSION}+g${zrecord_sha}")
+        else()
+            set(ZRECORD_VERSION "${PROJECT_VERSION}+dev")
+        endif()
+    endif()
+endif()
+message(STATUS "zrecord version: ${ZRECORD_VERSION}")
+configure_file(cmake/zrecord_version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/zrecord_version.h" @ONLY)
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
@@ -53,6 +91,7 @@ add_library(zrecord_gui STATIC
 )
 
 target_link_libraries(zrecord_gui PUBLIC zrecord_core)
+target_include_directories(zrecord_gui PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_executable(zrecord src/main.cpp)
 
@@ -65,7 +104,8 @@ install(TARGETS zrecord RUNTIME DESTINATION bin)
 install(FILES packaging/zrecord.desktop DESTINATION share/applications)
 
 set(CPACK_PACKAGE_NAME "zrecord")
-set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_VERSION "${ZRECORD_VERSION}")
+set(CPACK_DEBIAN_PACKAGE_VERSION "${ZRECORD_VERSION}")
 set(CPACK_PACKAGE_CONTACT "stevebj.ee@gmail.com")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Qt6 multi-track audio recorder/editor with live filters and voice effects")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "stevebj.ee@gmail.com")

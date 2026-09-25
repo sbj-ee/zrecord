@@ -17,6 +17,7 @@
 #include "TrackPanel.h"
 #include "NormalizeDialog.h"
 #include "PeakMeter.h"
+#include "zrecord_version.h"
 
 using namespace zrecord;
 
@@ -76,6 +77,7 @@ private slots:
     void peakMeterClipLedLatchesUntilClicked();
     void mainWindowMetersPlayback();
     void repaintDoesNotWaitForTheProjectMutex();
+    void aboutShowsTheBuildVersion();
 
 private:
     Project project_;
@@ -969,6 +971,15 @@ void TestGui::repaintDoesNotWaitForTheProjectMutex() {
     for (Track& track : project_.tracks) {
         track.display = TrackDisplay::Waveform;
     }
+}
+
+void TestGui::aboutShowsTheBuildVersion() {
+    // Plain x.y.z only for a release build; otherwise x.y.z+g<sha> (or
+    // +dev without git), so a development build can't pass for a release.
+    const QString version = ZRECORD_VERSION;
+    QVERIFY2(QRegularExpression("^\\d+\\.\\d+\\.\\d+(\\+g[0-9a-f]{7,}|\\+dev)?$").match(version).hasMatch(),
+             qPrintable(version));
+    QVERIFY(MainWindow::aboutText().contains("zrecord " + version));
 }
 
 QTEST_MAIN(TestGui)

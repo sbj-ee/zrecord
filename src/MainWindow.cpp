@@ -2,6 +2,9 @@
 
 #include "NormalizeDialog.h"
 #include "PeakMeter.h"
+#include "zrecord_version.h"
+
+#include <portaudio.h>
 
 #include <QAction>
 #include <QActionGroup>
@@ -562,6 +565,21 @@ void MainWindow::buildMenus() {
     viewMenu->addAction(zoomInAction_);
     viewMenu->addAction(zoomOutAction_);
     viewMenu->addAction(zoomFitAction_);
+
+    QMenu* helpMenu = menuBar()->addMenu("&Help");
+    QAction* aboutAction = helpMenu->addAction("About zrecord");
+    connect(aboutAction, &QAction::triggered, this, &MainWindow::onAbout);
+}
+
+QString MainWindow::aboutText() {
+    return QString("<b>zrecord %1</b><br>"
+                   "Multi-track audio recorder and editor.<br>"
+                   "Qt %2, %3.")
+        .arg(ZRECORD_VERSION, qVersion(), QString::fromUtf8(Pa_GetVersionInfo()->versionText));
+}
+
+void MainWindow::onAbout() {
+    QMessageBox::about(this, "About zrecord", aboutText());
 }
 
 void MainWindow::queryInitialMicVolume() {

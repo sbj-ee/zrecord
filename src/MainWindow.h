@@ -54,6 +54,7 @@ private slots:
     void onFadeIn();
     void onFadeOut();
     void onNormalize();
+    void onAbout();
     void onCrossfade();
     void onApplyEffect();
     void onSelectAll();
@@ -94,6 +95,9 @@ public:
     // Replaces exec() of the Normalize/Amplify dialog: the function sets it
     // up and returns whether it was accepted.
     using NormalizeDialogDriver = std::function<bool(class NormalizeDialog&)>;
+    // The About box text (includes the version, dev suffix and all).
+    static QString aboutText();
+
     void setNormalizeDialogDriverForTest(NormalizeDialogDriver driver) { normalizeDriver_ = std::move(driver); }
 
 protected:
