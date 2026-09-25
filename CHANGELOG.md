@@ -43,6 +43,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   renders lock- and allocation-free from a snapshot of the project that is
   refreshed every tick, and spectrogram tiles are cached, so a repeat
   spectrogram repaint takes ~1.4 ms instead of ~430 ms.
+- **Import converts the sample rate.** A file at a different rate than the
+  project (say 48 kHz into 44.1 kHz) was added as-is and played at the wrong
+  speed and pitch. It is now resampled to the project rate with libsamplerate
+  (new dependency), and the status bar says so. Opening a project likewise
+  resamples any clip stored at another rate. A rejected import (channel
+  mismatch) no longer leaves an empty "Imported" track behind.
 
 ## [0.2.0]
 

@@ -11,6 +11,8 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
 pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
+# Resampling imported audio to the project rate (Debian: libsamplerate0-dev).
+pkg_check_modules(SAMPLERATE REQUIRED IMPORTED_TARGET samplerate)
 
 # Everything that isn't a widget lives in a library so the tests can link the
 # real code rather than a copy of it. The GUI classes (MainWindow, TrackPanel)
@@ -28,6 +30,7 @@ add_library(zrecord_core STATIC
     src/ProjectFile.cpp
     src/SampleBuffer.cpp
     src/PlaybackMixer.cpp
+    src/Resampler.cpp
 )
 
 target_include_directories(zrecord_core PUBLIC src)
@@ -36,6 +39,7 @@ target_link_libraries(zrecord_core PUBLIC
     Qt6::Widgets
     PkgConfig::PORTAUDIO
     PkgConfig::SNDFILE
+    PkgConfig::SAMPLERATE
 )
 
 # The widgets live in a library too, so the GUI tests can drive the real

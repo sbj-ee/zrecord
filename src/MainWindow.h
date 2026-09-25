@@ -73,6 +73,11 @@ public:
     // and false is returned with the reason in `error`.
     bool openProjectFolder(const QString& path, QString* error = nullptr);
 
+    // Imports an audio file onto the selected (or last) track, converting it
+    // to the project's sample rate if needed (what File > Import does after
+    // its dialog). `note` gets a short description of any conversion.
+    bool importAudioFile(const QString& path, QString* error = nullptr, QString* note = nullptr);
+
 private:
     void buildUi();
     // Menus reuse the same QActions the toolbar shows, so the two can't drift

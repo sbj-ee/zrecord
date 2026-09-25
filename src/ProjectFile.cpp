@@ -1,5 +1,7 @@
 #include "ProjectFile.h"
 
+#include "Resampler.h"
+
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -144,6 +146,16 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
             if (!AudioFileReader::read(dir.filePath(relativeFile).toStdString(), samples,
                                         sampleRate, clip.channels, errorMessage)) {
                 return false;
+            }
+            if (sampleRate != static_cast<int>(loaded.sampleRate)) {
+                // zrecord always writes clips at the project rate; a clip that
+                // isn't (hand-assembled project) would play at the wrong speed.
+                std::vector<float> converted;
+                if (!Resampler::convert(samples, clip.channels, sampleRate, loaded.sampleRate, converted,
+                                        errorMessage)) {
+                    return false;
+                }
+                samples = std::move(converted);
             }
             clip.samples = SampleBuffer(samples);
             clip.peaks.build(clip.samples, clip.channels);

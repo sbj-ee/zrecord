@@ -3,6 +3,7 @@
 
 #include "FakeAudioEngine.h"
 #include "MainWindow.h"
+#include "AudioFileWriter.h"
 #include "ProjectFile.h"
 #include "TrackPanel.h"
 
@@ -48,6 +49,7 @@ private slots:
     void mainWindowClosesCleanlyWithUndoHistory();
     void spectrogramRepaintsReuseCachedTiles();
     void mainWindowRefreshesPlaybackWhilePlaying();
+    void mainWindowImportResamplesToTheProjectRate();
 
 private:
     Project project_;
@@ -421,6 +423,41 @@ void TestGui::mainWindowRefreshesPlaybackWhilePlaying() {
     const int afterStop = fake->refreshCalls();
     QTest::qWait(150);
     QCOMPARE(fake->refreshCalls(), afterStop);
+}
+
+void TestGui::mainWindowImportResamplesToTheProjectRate() {
+    // Regression: import checked only the channel count, so a 48 kHz file in
+    // a 44.1 kHz project was added as-is and played ~9% slow and flat.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("one-second-48k.wav");
+    std::string error;
+    QVERIFY(AudioFileWriter::writeFloatWav(path.toStdString(), SampleBuffer(size_t(48000), 0.25f), 48000, 1,
+                                           error));
+
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    project->channels = 1;
+    project->sampleRate = 44100.0;
+    Track track;
+    track.clips.push_back(makeClip(0, 1000));
+    project->tracks.push_back(std::move(track));
+
+    QString message;
+    QString note;
+    QVERIFY2(window.importAudioFile(path, &message, &note), qPrintable(message));
+    QCOMPARE(project->sampleRate, 44100.0);
+    QCOMPARE(project->tracks[0].clips.size(), size_t(2));
+    const int64_t frames = project->tracks[0].clips[1].frameCount();
+    QVERIFY2(std::llabs(frames - 44100) <= 2, qPrintable(QString::number(frames))); // still one second
+    QVERIFY(note.contains("48000"));
+
+    // A channel mismatch is refused without adding anything.
+    const QString stereo = dir.filePath("stereo.wav");
+    QVERIFY(AudioFileWriter::writeFloatWav(stereo.toStdString(), SampleBuffer(size_t(200), 0.1f), 44100, 2, error));
+    QVERIFY(!window.importAudioFile(stereo, &message));
+    QCOMPARE(project->tracks.size(), size_t(1));
+    QCOMPARE(project->tracks[0].clips.size(), size_t(2));
 }
 
 QTEST_MAIN(TestGui)

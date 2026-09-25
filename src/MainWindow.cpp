@@ -34,6 +34,7 @@
 #include "AudioFileWriter.h"
 #include "Commands.h"
 #include "ProjectFile.h"
+#include "Resampler.h"
 
 namespace zrecord {
 
@@ -883,36 +884,75 @@ void MainWindow::onImportAudio() {
     if (path.isEmpty()) {
         return;
     }
+    QString error;
+    QString note;
+    if (!importAudioFile(path, &error, &note)) {
+        QMessageBox::warning(this, "Import failed", error);
+        return;
+    }
+    if (!note.isEmpty()) {
+        statusLabel_->setText(note);
+    }
+}
+
+bool MainWindow::importAudioFile(const QString& path, QString* error, QString* note) {
+    auto fail = [error](const QString& message) {
+        if (error != nullptr) {
+            *error = message;
+        }
+        return false;
+    };
 
     std::vector<float> samples;
     int sampleRate = 0;
     int channels = 0;
-    std::string error;
-    if (!AudioFileReader::read(path.toStdString(), samples, sampleRate, channels, error)) {
-        QMessageBox::warning(this, "Import failed", QString::fromStdString(error));
-        return;
+    std::string readError;
+    if (!AudioFileReader::read(path.toStdString(), samples, sampleRate, channels, readError)) {
+        return fail(QString::fromStdString(readError));
+    }
+
+    // Validate before touching the project, so a rejected file doesn't leave
+    // a stray empty "Imported" track behind.
+    const bool adoptFileFormat = !projectHasAnyContent();
+    if (!adoptFileFormat && channels != project_.channels) {
+        return fail(QString("This project is %1-channel; the imported file is %2-channel.")
+                        .arg(project_.channels)
+                        .arg(channels));
+    }
+    if (!adoptFileFormat && sampleRate != static_cast<int>(project_.sampleRate)) {
+        // Added as-is, a 48 kHz file in a 44.1 kHz project would play back
+        // ~9% slow and flat.
+        std::vector<float> converted;
+        std::string convertError;
+        if (!Resampler::convert(samples, channels, sampleRate, project_.sampleRate, converted, convertError)) {
+            return fail(QString("Could not convert %1 Hz to %2 Hz: %3")
+                            .arg(sampleRate)
+                            .arg(static_cast<int>(project_.sampleRate))
+                            .arg(QString::fromStdString(convertError)));
+        }
+        samples = std::move(converted);
+        if (note != nullptr) {
+            *note = QString("Imported and resampled from %1 Hz to %2 Hz")
+                        .arg(sampleRate)
+                        .arg(static_cast<int>(project_.sampleRate));
+        }
     }
 
     if (project_.tracks.empty()) {
         undoStack_->push(new AddTrackCommand(project_, "Imported"));
         trackPanel_->refresh();
     }
-
-    if (!projectHasAnyContent()) {
+    if (adoptFileFormat) {
         project_.sampleRate = sampleRate;
         project_.channels = channels;
-    } else if (channels != project_.channels) {
-        QMessageBox::warning(this, "Channel mismatch",
-                              QString("This project is %1-channel; the imported file is %2-channel.")
-                                  .arg(project_.channels)
-                                  .arg(channels));
-        return;
     }
 
     int trackIndex = project_.selection.trackIndex >= 0 ? project_.selection.trackIndex
                                                           : static_cast<int>(project_.tracks.size()) - 1;
-    undoStack_->push(new AppendClipCommand(project_, trackIndex, samples, channels, "Import"));
+    undoStack_->push(new AppendClipCommand(project_, trackIndex, std::move(samples), channels, "Import"));
     trackPanel_->refresh();
+    setControlsEnabled(false);
+    return true;
 }
 
 void MainWindow::onCut() {

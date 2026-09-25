@@ -52,6 +52,7 @@ private slots:
     void loadsLegacy24BitProjects();
     void integerExportClipsInsteadOfWrapping();
     void failedLoadLeavesProjectUntouched();
+    void loadResamplesClipsAtAnotherRate();
 };
 
 void TestProjectFile::saveKeepsSamplesBeyondFullScale() {
@@ -183,6 +184,28 @@ void TestProjectFile::failedLoadLeavesProjectUntouched() {
     QCOMPARE(project.selection.endFrame, int64_t(1));
     QCOMPARE(project.playheadFrame, int64_t(7));
     QCOMPARE(project.clipboard.size(), size_t(2));
+}
+
+void TestProjectFile::loadResamplesClipsAtAnotherRate() {
+    // A clip whose file rate differs from the project's used to be loaded
+    // as-is and played at the wrong speed.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QDir(dir.path()).mkpath("mixed.zrproj/audio");
+    const QString root = dir.filePath("mixed.zrproj");
+    QVERIFY(writeRaw(root + "/audio/a.wav", std::vector<float>(22050, 0.25f), SF_FORMAT_WAV | SF_FORMAT_FLOAT));
+    // writeRaw writes 44.1 kHz; claim the project is 88.2 kHz.
+    QFile json(root + "/project.json");
+    QVERIFY(json.open(QIODevice::WriteOnly));
+    json.write(R"({"sampleRate":88200,"channels":1,"labels":[],
+        "tracks":[{"name":"T","clips":[{"file":"audio/a.wav","startFrame":"0"}]}]})");
+    json.close();
+
+    Project loaded;
+    std::string error;
+    QVERIFY2(ProjectFile::load(loaded, root.toStdString(), error), error.c_str());
+    const int64_t frames = loaded.tracks[0].clips[0].frameCount();
+    QVERIFY2(std::llabs(frames - 44100) <= 2, qPrintable(QString::number(frames))); // still 0.5 s
 }
 
 QTEST_GUILESS_MAIN(TestProjectFile)
