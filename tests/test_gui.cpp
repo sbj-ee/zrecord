@@ -1,3 +1,4 @@
+#include <QComboBox>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QUndoStack>
@@ -55,6 +56,7 @@ private slots:
     void mainWindowImportResamplesToTheProjectRate();
     void envelopeDragIsOneUndoableStep();
     void mainWindowAsksBeforeDiscardingUnsavedChanges();
+    void mainWindowRecordsWithTheDevicesChannelCount();
 
 private:
     Project project_;
@@ -556,6 +558,68 @@ void TestGui::mainWindowAsksBeforeDiscardingUnsavedChanges() {
     QCOMPARE(asked.size(), 1);
     QVERIFY(project->tracks.empty());
     QVERIFY(!window.hasUnsavedChanges());
+}
+
+namespace {
+QPushButton* findButton(QWidget& window, const QString& text) {
+    for (QPushButton* button : window.findChildren<QPushButton*>()) {
+        if (button->text() == text) {
+            return button;
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+void TestGui::mainWindowRecordsWithTheDevicesChannelCount() {
+    // Regression: recording defaulted to stereo and always opened the device
+    // with the project's channel count, ignoring maxInputChannels, so a
+    // mono-only device (ALSA hw) failed with "Invalid number of channels".
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    AudioDeviceInfo mono;
+    mono.index = 3;
+    mono.name = "Mono Mic";
+    mono.maxInputChannels = 1;
+    fake->setInputDevices({mono});
+    MainWindow window(std::move(engine));
+
+    // A new project defaults to what the device can deliver.
+    QComboBox* channels = nullptr;
+    for (QComboBox* combo : window.findChildren<QComboBox*>()) {
+        if (combo->findText("Stereo") >= 0) {
+            channels = combo;
+        }
+    }
+    QVERIFY(channels != nullptr);
+    QCOMPARE(channels->currentText(), QString("Mono"));
+
+    // An existing stereo project records mono from this device and gets the
+    // take upmixed.
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    project->channels = 2;
+    Track track;
+    Clip clip;
+    clip.channels = 2;
+    clip.samples = SampleBuffer(size_t(20), 0.1f);
+    track.clips.push_back(clip);
+    track.recordArmed = true;
+    project->tracks.push_back(std::move(track));
+
+    QPushButton* record = findButton(window, "●  RECORD");
+    QVERIFY(record != nullptr);
+    record->click();
+    QVERIFY(fake->isRecording());
+    QCOMPARE(fake->lastRecordingDevice(), 3);
+    QCOMPARE(fake->lastRecordingChannels(), 1);
+
+    fake->setCapturedBuffer({0.25f, -0.5f, 0.75f});
+    record->click();
+    QVERIFY(!fake->isRecording());
+    QCOMPARE(project->tracks[0].clips.size(), size_t(2));
+    const Clip& take = project->tracks[0].clips[1];
+    QCOMPARE(take.channels, 2);
+    QCOMPARE(take.samples.toVector(), (std::vector<float>{0.25f, 0.25f, -0.5f, -0.5f, 0.75f, 0.75f}));
 }
 
 QTEST_MAIN(TestGui)

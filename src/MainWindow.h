@@ -109,6 +109,9 @@ private:
     // Stops playback (if any) and resets the Play button; used before the
     // project it reads from is replaced.
     void stopPlaybackNow();
+    void onInputDeviceChanged();
+    int selectedDeviceMaxChannels() const;
+    static constexpr int kMaxChannelsRole = Qt::UserRole + 1;
     // Asks before `action` would discard unsaved changes. True to go ahead
     // (nothing unsaved, saved, or discarded), false if the user cancelled.
     bool confirmDiscardChanges(const QString& action);
@@ -123,6 +126,7 @@ private:
     // True from a successful startPlayback() until the stream is released,
     // including after it ends by itself (onTick releases it then).
     bool playbackActive_ = false;
+    int recordingChannels_ = 2; // channels the current take is captured with
     QString projectPath_;          // last saved/opened .zrproj, if any
     bool settingsDirty_ = false;   // header changes outside the undo stack
     UnsavedChangesPrompt unsavedPrompt_;

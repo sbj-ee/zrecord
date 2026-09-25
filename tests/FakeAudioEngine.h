@@ -9,20 +9,26 @@ namespace zrecord {
 // what the UI does about it.
 class FakeAudioEngine : public AudioEngineInterface {
 public:
-    std::vector<AudioDeviceInfo> listInputDevices() const override {
+    FakeAudioEngine() {
         AudioDeviceInfo device;
         device.index = 0;
         device.name = "Fake Input";
         device.maxInputChannels = 2;
-        return {device};
+        devices_ = {device};
     }
-    int defaultInputDeviceIndex() const override { return 0; }
+    std::vector<AudioDeviceInfo> listInputDevices() const override { return devices_; }
+    int defaultInputDeviceIndex() const override { return devices_.empty() ? -1 : devices_.front().index; }
+    void setInputDevices(std::vector<AudioDeviceInfo> devices) { devices_ = std::move(devices); }
 
-    bool startRecording(int, int, double, std::string&) override {
+    bool startRecording(int deviceIndex, int channels, double, std::string&) override {
         recording_ = true;
         muted_ = false;
+        lastRecordingDevice_ = deviceIndex;
+        lastRecordingChannels_ = channels;
         return true;
     }
+    int lastRecordingDevice() const { return lastRecordingDevice_; }
+    int lastRecordingChannels() const { return lastRecordingChannels_; }
     void stopRecording() override { recording_ = false; }
     bool isRecording() const override { return recording_; }
 
@@ -64,6 +70,9 @@ private:
     bool playing_ = false;
     bool muted_ = false;
     int stopPlaybackCalls_ = 0;
+    std::vector<AudioDeviceInfo> devices_;
+    int lastRecordingDevice_ = -1;
+    int lastRecordingChannels_ = 0;
     int refreshCalls_ = 0;
     int64_t playbackFrame_ = 0;
     FilterSettings settings_;

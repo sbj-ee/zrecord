@@ -128,6 +128,7 @@ void MainWindow::buildUi() {
     micRow->addWidget(micVolumeValueLabel_);
     rootLayout->addLayout(micRow);
     connect(micVolumeSlider_, &QSlider::valueChanged, this, &MainWindow::onMicVolumeChanged);
+    connect(deviceCombo_, &QComboBox::currentIndexChanged, this, [this](int) { onInputDeviceChanged(); });
 
     // A real QToolBar rather than a row of buttons in a layout: when the
     // window is too narrow for every entry, QToolBar folds the overflow into
@@ -586,12 +587,33 @@ void MainWindow::refreshDevices() {
     int defaultComboIndex = -1;
     for (const auto& d : engine_->listInputDevices()) {
         deviceCombo_->addItem(QString::fromStdString(d.name), d.index);
+        deviceCombo_->setItemData(deviceCombo_->count() - 1, d.maxInputChannels, kMaxChannelsRole);
         if (d.index == defaultDevice) {
             defaultComboIndex = deviceCombo_->count() - 1;
         }
     }
     if (defaultComboIndex >= 0) {
         deviceCombo_->setCurrentIndex(defaultComboIndex);
+    }
+    onInputDeviceChanged();
+}
+
+int MainWindow::selectedDeviceMaxChannels() const {
+    bool ok = false;
+    int channels = deviceCombo_->currentData(kMaxChannelsRole).toInt(&ok);
+    return ok && channels > 0 ? channels : 2;
+}
+
+void MainWindow::onInputDeviceChanged() {
+    // Default the new project's channel count from what the device can
+    // actually deliver: a mono-only device opened directly (ALSA hw) refuses
+    // a stereo stream outright.
+    if (!projectHasAnyContent()) {
+        int wanted = std::min(2, selectedDeviceMaxChannels());
+        int index = channelsCombo_->findData(wanted);
+        if (index >= 0) {
+            channelsCombo_->setCurrentIndex(index);
+        }
     }
 }
 
@@ -713,9 +735,12 @@ void MainWindow::onToggleRecord() {
 
         recordingArmedTrackIndex_ = armedIndex;
         int deviceIndex = deviceCombo_->currentData().toInt();
+        // Never ask the device for more channels than it has; a mono take
+        // for a stereo project is upmixed when it's added.
+        recordingChannels_ = std::max(1, std::min(project_.channels, selectedDeviceMaxChannels()));
 
         std::string error;
-        if (engine_->startRecording(deviceIndex, project_.channels, project_.sampleRate, error)) {
+        if (engine_->startRecording(deviceIndex, recordingChannels_, project_.sampleRate, error)) {
             recordButton_->setText("■  STOP");
             recordButton_->setStyleSheet(
                 "QPushButton {"
@@ -741,8 +766,16 @@ void MainWindow::onToggleRecord() {
         trackPanel_->endLiveCapture();
         recordingBar_->hide();
 
+        if (recordingChannels_ == 1 && project_.channels == 2) {
+            std::vector<float> stereo(captured.size() * 2);
+            for (size_t i = 0; i < captured.size(); ++i) {
+                stereo[2 * i] = stereo[2 * i + 1] = captured[i];
+            }
+            captured = std::move(stereo);
+        }
         if (!captured.empty() && recordingArmedTrackIndex_ >= 0) {
-            undoStack_->push(new AppendClipCommand(project_, recordingArmedTrackIndex_, captured, project_.channels, "Record"));
+            undoStack_->push(new AppendClipCommand(project_, recordingArmedTrackIndex_, std::move(captured),
+                                                   project_.channels, "Record"));
         }
         recordingArmedTrackIndex_ = -1;
         trackPanel_->refresh();

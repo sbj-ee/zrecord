@@ -67,6 +67,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   state, even for controls that were switched off. Settings changes now
   update coefficients in place; a stage only starts fresh when it is switched
   on.
+- **Mono-only input devices work.** Recording always asked the device for
+  the project's channel count (stereo by default), so a mono device opened
+  directly failed with "Invalid number of channels". A new project now
+  defaults to the selected device's channel count, and a mono device
+  recording into a stereo project is captured in mono and upmixed.
 
 ## [0.2.0]
 
