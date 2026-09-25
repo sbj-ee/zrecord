@@ -7,6 +7,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **MIT license.** zrecord is now released under the MIT License (see
+  `LICENSE`). The .deb installs it as `/usr/share/doc/zrecord/copyright`,
+  and its maintainer and vendor fields name the copyright holder.
+
 ## [0.3.0] - 2026-09-25
 
 A reliability and editing release. It fixes the data-loss, crash, leak and
@@ -167,7 +173,6 @@ open, and are converted on their next save.
   - Loading a project doesn't validate clip positions or channel counts.
   - The mic volume slider starts a `pactl` process per change and always
     targets the default source rather than the selected device.
-- The repository has no LICENSE yet.
 
 ## [0.2.0]
 

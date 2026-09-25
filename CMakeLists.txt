@@ -105,12 +105,38 @@ add_subdirectory(tests)
 install(TARGETS zrecord RUNTIME DESTINATION bin)
 install(FILES packaging/zrecord.desktop DESTINATION share/applications)
 
+# /usr/share/doc/zrecord/copyright in Debian's machine-readable format,
+# generated from LICENSE so the two can't drift: the MIT text minus its
+# title and copyright line, each line indented, blank lines as " .".
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" zrecord_license_lines)
+set(ZRECORD_LICENSE_BODY "")
+foreach(line IN LISTS zrecord_license_lines)
+    if(line MATCHES "^MIT License$" OR line MATCHES "^Copyright ")
+        continue()
+    endif()
+    if(line STREQUAL "")
+        if(ZRECORD_LICENSE_BODY STREQUAL "")
+            continue() # no leading paragraph separator
+        endif()
+        string(APPEND ZRECORD_LICENSE_BODY " .\n")
+    else()
+        string(APPEND ZRECORD_LICENSE_BODY " ${line}\n")
+    endif()
+endforeach()
+string(REGEX REPLACE "\n$" "" ZRECORD_LICENSE_BODY "${ZRECORD_LICENSE_BODY}")
+configure_file(cmake/debian-copyright.in "${CMAKE_CURRENT_BINARY_DIR}/copyright" @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/copyright" DESTINATION share/doc/zrecord)
+
 set(CPACK_PACKAGE_NAME "zrecord")
 set(CPACK_PACKAGE_VERSION "${ZRECORD_VERSION}")
 set(CPACK_DEBIAN_PACKAGE_VERSION "${ZRECORD_VERSION}")
-set(CPACK_PACKAGE_CONTACT "stevebj.ee@gmail.com")
+set(CPACK_PACKAGE_CONTACT "Stephen B. Johnson <stevebj.ee@gmail.com>")
+set(CPACK_PACKAGE_VENDOR "Stephen B. Johnson")
+# MIT. A .deb has no license control field; the license travels in
+# /usr/share/doc/zrecord/copyright (installed above).
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Qt6 multi-track audio recorder/editor with live filters and voice effects")
-set(CPACK_DEBIAN_PACKAGE_MAINTAINER "stevebj.ee@gmail.com")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Stephen B. Johnson <stevebj.ee@gmail.com>")
 set(CPACK_DEBIAN_PACKAGE_SECTION "sound")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS YES)
 # The mic volume slider drives PipeWire/PulseAudio through pactl; without it

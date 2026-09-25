@@ -1,0 +1,11 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: zrecord
+Upstream-Contact: Stephen B. Johnson <stevebj.ee@gmail.com>
+Source: https://github.com/sbj-ee/zrecord
+
+Files: *
+Copyright: 2026 Stephen B. Johnson
+License: Expat
+
+License: Expat
+@ZRECORD_LICENSE_BODY@

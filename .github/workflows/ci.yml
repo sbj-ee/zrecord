@@ -42,7 +42,8 @@ jobs:
         run: cpack -G DEB
 
       # The package must carry real dependencies (from dpkg-shlibdeps), the
-      # pactl recommendation, and a dev version on untagged builds.
+      # pactl recommendation, a dev version on untagged builds, and the
+      # license.
       - name: Check .deb metadata
         working-directory: build
         run: |
@@ -52,6 +53,10 @@ jobs:
           dpkg-deb -f "$deb" Depends | grep -q libportaudio2
           dpkg-deb -f "$deb" Recommends | grep -q pulseaudio-utils
           dpkg-deb -f "$deb" Version | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\+g[0-9a-f]{7,}$'
+          # The MIT license ships as the Debian copyright file.
+          dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/share/doc/zrecord/copyright > copyright.txt
+          grep -q '^License: Expat$' copyright.txt
+          grep -q '^Copyright: 2026 Stephen B. Johnson$' copyright.txt
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
