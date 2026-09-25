@@ -7,6 +7,14 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-25
+
+A reliability and editing release. It fixes the data-loss, crash, leak and
+glitch bugs found in review (see Fixed). It adds a moving playhead with
+click-to-seek, a dB peak meter, Normalize / Amplify and an offline Voice
+Changer. Projects now store clips as 32-bit float WAV; older projects still
+open, and are converted on their next save.
+
 ### Added
 
 - **Click-to-seek and a following view.** Click or drag along the ruler to
@@ -61,7 +69,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Saved projects no longer corrupt loud audio.** Clips were stored as 24-bit
   PCM without clipping, so any sample past full scale (after gain or echo)
   wrapped around on save: 1.2 reopened as -0.8. Project clips are now stored as
-  32-bit float WAV, which reopens exactly; projects saved as 24-bit still load.
+  32-bit float WAV, which reopens exactly. Projects saved as 24-bit still load,
+  and are converted to float on their next save.
   Integer-PCM exports (WAV/FLAC) now clip instead of wrapping.
 - **The limiter now actually prevents clipping.** It ran first in the filter
   chain, so gain, the compressor and the voice effects after it could push the
@@ -144,6 +153,22 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The timeline's layout no longer waits on the project lock**, the last
   place a repaint could be held up by it.
 
+### Known limitations
+
+- The Voice Changer processes on the UI thread with no progress bar, so a
+  long selection freezes the window until it finishes (preview too).
+- The Robot preset's buzz has a fixed pitch (about 86 Hz at 44.1 kHz).
+- Voice Changer preview plays the processed selection on its own. It does
+  not include the live filter chain (gain, filters, voice effects, limiter).
+- Deferred from review:
+  - Track header mute/solo/gain/display changes are not undoable and are
+    written without the project lock (they do now mark the project
+    unsaved).
+  - Loading a project doesn't validate clip positions or channel counts.
+  - The mic volume slider starts a `pactl` process per change and always
+    targets the default source rather than the selected device.
+- The repository has no LICENSE yet.
+
 ## [0.2.0]
 
 zrecord became a multi-track editor. 0.1.0 recorded into a single buffer and
@@ -208,6 +233,7 @@ makes editing safe.
 - Playback of the current recording, and export to WAV, FLAC, OGG Vorbis or MP3.
 - `.deb` packaging via CPack.
 
-[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.3.0
 [0.2.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.1.0
