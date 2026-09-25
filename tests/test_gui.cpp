@@ -16,6 +16,7 @@
 #include "SavedProjectPaths.h"
 #include "TrackPanel.h"
 #include "NormalizeDialog.h"
+#include "VoiceChangerDialog.h"
 #include "PeakMeter.h"
 #include "zrecord_version.h"
 
@@ -72,6 +73,9 @@ private slots:
     void seekingAndAutoScrollDuringPlayback();
     void normalizeDialogFlagsClipping();
     void normalizeSelectionIsOneUndoStep();
+    void voiceChangerPresetsAndCustom();
+    void voiceChangerPreviewThenApplyIsOneUndoStep();
+    void voiceChangerCancelStopsPreviewAndChangesNothing();
     void amplifySelectedClips();
     void peakMeterBallisticsAndHold();
     void peakMeterClipLedLatchesUntilClicked();
@@ -980,6 +984,144 @@ void TestGui::aboutShowsTheBuildVersion() {
     QVERIFY2(QRegularExpression("^\\d+\\.\\d+\\.\\d+(\\+g[0-9a-f]{7,}|\\+dev)?$").match(version).hasMatch(),
              qPrintable(version));
     QVERIFY(MainWindow::aboutText().contains("zrecord " + version));
+}
+
+void TestGui::voiceChangerPresetsAndCustom() {
+    VoiceChangerDialog dialog("the selection (1.00 s)");
+    QCOMPARE(dialog.preset(), VoicePreset::Deeper);
+    QVERIFY(dialog.settings() == voicePresetSettings(VoicePreset::Deeper));
+    dialog.setPreset(VoicePreset::Chipmunk);
+    QVERIFY(dialog.settings() == voicePresetSettings(VoicePreset::Chipmunk));
+    dialog.setPreset(VoicePreset::Robot);
+    QVERIFY(dialog.settings().robot);
+    // Touching any control makes it a custom voice, keeping the other values.
+    dialog.setFormant(3.0);
+    QCOMPARE(dialog.preset(), VoicePreset::Custom);
+    QVERIFY(dialog.settings().robot);
+    QCOMPARE(dialog.settings().formantSemitones, 3.0f);
+    dialog.setPreset(VoicePreset::Higher);
+    QVERIFY(dialog.settings() == voicePresetSettings(VoicePreset::Higher));
+    // All zero is no change: nothing to apply or preview.
+    dialog.setPitch(0.0);
+    dialog.setFormant(0.0);
+    QCOMPARE(dialog.preset(), VoicePreset::Custom);
+    QVERIFY(dialog.settings().isIdentity());
+    QVERIFY(!dialog.applyButton()->isEnabled());
+    QVERIFY(!dialog.previewButton()->isEnabled());
+    dialog.setPitch(-2.5);
+    QVERIFY(dialog.applyButton()->isEnabled());
+    QVERIFY(dialog.previewButton()->isEnabled());
+}
+
+namespace {
+
+// A 1 s, 44.1 kHz mono project holding a 200 Hz sine, with frames
+// 10000..30000 selected.
+struct VoiceFixture {
+    FakeAudioEngine* engine = nullptr;
+    std::unique_ptr<MainWindow> window;
+    Project* project = nullptr;
+    QAction* action = nullptr;
+
+    VoiceFixture() {
+        auto fake = std::make_unique<FakeAudioEngine>();
+        engine = fake.get();
+        window = std::make_unique<MainWindow>(std::move(fake));
+        project = window->findChild<TrackPanel*>()->projectForTest();
+        project->channels = 1;
+        project->sampleRate = 44100.0;
+        std::vector<float> tone(44100);
+        for (size_t i = 0; i < tone.size(); ++i) {
+            tone[i] = 0.5f * static_cast<float>(std::sin(2.0 * M_PI * 200.0 * double(i) / 44100.0));
+        }
+        Track track;
+        Clip clip;
+        clip.channels = 1;
+        clip.samples = SampleBuffer(tone);
+        track.clips.push_back(std::move(clip));
+        project->tracks.push_back(std::move(track));
+        window->findChild<TrackPanel*>()->refresh();
+        project->selection.trackIndex = 0;
+        project->selection.startFrame = 10000;
+        project->selection.endFrame = 30000;
+        window->refreshActionStateForTest();
+        for (QAction* a : window->findChildren<QAction*>()) {
+            if (a->text() == "Voice Changer...") {
+                action = a;
+            }
+        }
+    }
+    std::vector<float> samples() const { return project->tracks[0].clips[0].samples.toVector(); }
+};
+
+} // namespace
+
+void TestGui::voiceChangerPreviewThenApplyIsOneUndoStep() {
+    VoiceFixture f;
+    QVERIFY(f.action != nullptr);
+    QVERIFY(f.action->isEnabled());
+    const std::vector<float> original = f.samples();
+    QUndoStack* undo = f.window->findChild<QUndoStack*>();
+    const int before = undo->count();
+
+    bool checkedPreview = false;
+    f.window->setVoiceChangerDialogDriverForTest([&](VoiceChangerDialog& dialog) {
+        dialog.setPreset(VoicePreset::Deeper);
+        QTest::mouseClick(dialog.previewButton(), Qt::LeftButton);
+        // The preview plays a processed copy of just the selection, through
+        // the same engine, and leaves the project alone.
+        const Project* preview = f.window->previewProjectForTest();
+        if (preview == nullptr || !f.engine->isPlaying() || f.engine->lastPlaybackProject() != preview) {
+            return false;
+        }
+        checkedPreview = preview->lengthFrames() == 20000 && preview->playheadFrame == 0
+                         && dialog.previewPlaying() && f.samples() == original
+                         && preview->tracks[0].clips[0].samples.toVector()
+                                != std::vector<float>(original.begin() + 10000, original.begin() + 30000);
+        // Running out by itself puts the button back to Preview.
+        f.engine->finishPlayback();
+        f.window->tickForTest();
+        checkedPreview = checkedPreview && !dialog.previewPlaying() && f.window->previewProjectForTest() == nullptr;
+        // Start it again and Apply while it plays.
+        QTest::mouseClick(dialog.previewButton(), Qt::LeftButton);
+        return true;
+    });
+    f.action->trigger();
+
+    QVERIFY(checkedPreview);
+    QVERIFY(!f.engine->isPlaying());                         // closing the dialog stopped the preview
+    QVERIFY(f.window->previewProjectForTest() == nullptr);
+    QCOMPARE(undo->count(), before + 1);
+    QCOMPARE(undo->undoText(), QString("Voice Changer: Deeper"));
+    const std::vector<float> after = f.samples();
+    QCOMPARE(after.size(), original.size());
+    QVERIFY(std::equal(after.begin(), after.begin() + 10000, original.begin()));   // before the selection
+    QVERIFY(std::equal(after.begin() + 30000, after.end(), original.begin() + 30000)); // after it
+    QVERIFY(!std::equal(after.begin() + 10000, after.begin() + 30000, original.begin() + 10000));
+    undo->undo();
+    QVERIFY(f.samples() == original);
+    undo->redo();
+    QVERIFY(f.samples() == after);
+}
+
+void TestGui::voiceChangerCancelStopsPreviewAndChangesNothing() {
+    VoiceFixture f;
+    const std::vector<float> original = f.samples();
+    QUndoStack* undo = f.window->findChild<QUndoStack*>();
+    const int before = undo->count();
+    bool wasPlaying = false;
+    f.window->setVoiceChangerDialogDriverForTest([&](VoiceChangerDialog& dialog) {
+        dialog.setPreset(VoicePreset::Chipmunk);
+        QTest::mouseClick(dialog.previewButton(), Qt::LeftButton);
+        wasPlaying = f.engine->isPlaying();
+        return false; // Cancel
+    });
+    f.action->trigger();
+    QVERIFY(wasPlaying);
+    QVERIFY(!f.engine->isPlaying());
+    QVERIFY(f.window->previewProjectForTest() == nullptr);
+    QCOMPARE(undo->count(), before);
+    QVERIFY(f.samples() == original);
 }
 
 QTEST_MAIN(TestGui)

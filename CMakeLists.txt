@@ -88,6 +88,7 @@ add_library(zrecord_gui STATIC
     src/MainWindow.cpp
     src/TrackPanel.cpp
     src/NormalizeDialog.cpp
+    src/VoiceChangerDialog.cpp
     src/PeakMeter.cpp
 )
 

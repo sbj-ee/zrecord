@@ -37,10 +37,16 @@ public:
     void setInputMuted(bool muted) override { muted_ = muted; }
     bool isInputMuted() const override { return muted_; }
 
-    bool startPlayback(Project&, std::string&) override {
+    bool startPlayback(Project& project, std::string&) override {
         playing_ = true;
+        lastPlaybackProject_ = &project;
+        ++startPlaybackCalls_;
         return true;
     }
+    // The project the last startPlayback() was given (may be dangling once
+    // its owner drops it; compare, don't dereference, unless still playing).
+    const Project* lastPlaybackProject() const { return lastPlaybackProject_; }
+    int startPlaybackCalls() const { return startPlaybackCalls_; }
     void stopPlayback() override {
         playing_ = false;
         ++stopPlaybackCalls_;
@@ -78,6 +84,8 @@ private:
     bool playing_ = false;
     bool muted_ = false;
     int stopPlaybackCalls_ = 0;
+    int startPlaybackCalls_ = 0;
+    const Project* lastPlaybackProject_ = nullptr;
     std::vector<AudioDeviceInfo> devices_;
     int lastRecordingDevice_ = -1;
     int lastRecordingChannels_ = 0;

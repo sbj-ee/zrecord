@@ -2,6 +2,7 @@
 
 #include "NormalizeDialog.h"
 #include "PeakMeter.h"
+#include "VoiceChangerDialog.h"
 #include "zrecord_version.h"
 
 #include <portaudio.h>
@@ -267,6 +268,10 @@ void MainWindow::buildUi() {
     normalizeAction_ = new QAction("Normalize / Amplify...", this);
     normalizeAction_->setStatusTip("Scale the selection or selected clips to a peak level, or by a gain");
     connect(normalizeAction_, &QAction::triggered, this, &MainWindow::onNormalize);
+    voiceChangerAction_ = new QAction("Voice Changer...", this);
+    voiceChangerAction_->setStatusTip("Shift the pitch and formants of the selection or selected clips "
+                                      "(length unchanged), with a preview");
+    connect(voiceChangerAction_, &QAction::triggered, this, &MainWindow::onVoiceChanger);
     connect(crossfadeAction_, &QAction::triggered, this, &MainWindow::onCrossfade);
     connect(undoAction_, &QAction::triggered, undoStack_, &QUndoStack::undo);
     connect(redoAction_, &QAction::triggered, undoStack_, &QUndoStack::redo);
@@ -543,6 +548,7 @@ void MainWindow::buildMenus() {
     editMenu->addAction(fadeInAction_);
     editMenu->addAction(fadeOutAction_);
     editMenu->addAction(normalizeAction_);
+    editMenu->addAction(voiceChangerAction_);
     editMenu->addAction(crossfadeAction_);
     editMenu->addAction(applyEffectAction_);
 
@@ -698,7 +704,8 @@ void MainWindow::setControlsEnabled(bool recording) {
                              addTrackAction_, removeTrackAction_, importAction_,
                              cutAction_, copyAction_, pasteAction_, deleteAction_,
                              silenceAction_, fadeInAction_, fadeOutAction_, crossfadeAction_,
-                             applyEffectAction_, addLabelAction_, selectAllAction_, normalizeAction_}) {
+                             applyEffectAction_, addLabelAction_, selectAllAction_, normalizeAction_,
+                             voiceChangerAction_}) {
         action->setEnabled(!recording);
     }
     if (!recording) {
@@ -766,6 +773,9 @@ void MainWindow::onToggleRecord() {
         // Playback and capture would otherwise fight over the device (and
         // playback's stream kept running under the take, unstoppable once
         // the controls were disabled).
+        if (previewActive_) {
+            stopVoicePreview();
+        }
         if (playbackActive_ || engine_->isPlaying()) {
             stopPlaybackNow();
         }
@@ -829,6 +839,9 @@ void MainWindow::onToggleRecord() {
 }
 
 void MainWindow::onTogglePlayback() {
+    if (previewActive_) {
+        stopVoicePreview(); // the engine plays one thing at a time
+    }
     if (!engine_->isPlaying()) {
         std::string error;
         playbackStartFrame_ = project_.playheadFrame;
@@ -1224,10 +1237,9 @@ void MainWindow::onCrossfade() {
     onSelectionChanged();
 }
 
-void MainWindow::onNormalize() {
+std::vector<GainTarget> MainWindow::editTargets(QString& scope) const {
     // A time selection wins; otherwise whole clips picked with the Move tool.
     std::vector<GainTarget> targets;
-    QString scope;
     if (!project_.selection.isEmpty()) {
         const Selection& sel = project_.selection;
         targets.push_back(GainTarget{sel.trackIndex, sel.startFrame, sel.endFrame});
@@ -1245,6 +1257,12 @@ void MainWindow::onNormalize() {
         }
         scope = targets.size() == 1 ? QString("1 clip") : QString("%1 clips").arg(targets.size());
     }
+    return targets;
+}
+
+void MainWindow::onNormalize() {
+    QString scope;
+    const std::vector<GainTarget> targets = editTargets(scope);
     if (targets.empty()) {
         QMessageBox::information(this, "Normalize / Amplify",
                                   "Select a time range, or pick clips with the Move tool, first.");
@@ -1272,6 +1290,127 @@ void MainWindow::onNormalize() {
     }
     undoStack_->push(new GainCommand(project_, targets, plan.gain, dialog.actionName()));
     trackPanel_->refresh();
+}
+
+void MainWindow::onVoiceChanger() {
+    QString scope;
+    const std::vector<GainTarget> targets = editTargets(scope);
+    if (targets.empty()) {
+        QMessageBox::information(this, "Voice Changer",
+                                  "Select a time range, or pick clips with the Move tool, first.");
+        return;
+    }
+
+    VoiceChangerDialog dialog(scope, this);
+    voiceDialog_ = &dialog;
+    connect(&dialog, &VoiceChangerDialog::previewRequested, this,
+            [this, targets](const VoiceSettings& settings) { startVoicePreview(targets, settings); });
+    connect(&dialog, &VoiceChangerDialog::previewStopRequested, this, &MainWindow::stopVoicePreview);
+    const bool accepted = voiceDriver_ ? voiceDriver_(dialog) : dialog.exec() == QDialog::Accepted;
+    stopVoicePreview();
+    voiceDialog_ = nullptr;
+    if (!accepted) {
+        return;
+    }
+    const VoiceSettings settings = dialog.settings();
+    if (settings.isIdentity()) {
+        return; // no change, no undo step
+    }
+    if (playbackActive_ || engine_->isPlaying()) {
+        stopPlaybackNow();
+    }
+    undoStack_->push(new VoiceChangeCommand(project_, targets, settings,
+                                            QString("Voice Changer: %1").arg(voicePresetName(dialog.preset()))));
+    trackPanel_->refresh();
+}
+
+void MainWindow::startVoicePreview(const std::vector<GainTarget>& targets, const VoiceSettings& settings) {
+    stopVoicePreview();
+    if (playbackActive_ || engine_->isPlaying()) {
+        stopPlaybackNow();
+    }
+
+    // Copy just the targeted audio into a scratch project that starts where
+    // the earliest target does, keeping each track's gain and envelope so the
+    // preview sounds like the edit will.
+    auto preview = std::make_unique<Project>();
+    int64_t origin = 0;
+    {
+        std::lock_guard<std::mutex> lock(project_.mutex);
+        preview->sampleRate = project_.sampleRate;
+        preview->channels = project_.channels;
+        origin = targets.front().startFrame;
+        for (const GainTarget& t : targets) {
+            origin = std::min(origin, t.startFrame);
+        }
+        std::vector<int> trackMap(project_.tracks.size(), -1);
+        for (const GainTarget& t : targets) {
+            if (t.trackIndex < 0 || t.trackIndex >= static_cast<int>(project_.tracks.size())) {
+                continue;
+            }
+            const Track& source = project_.tracks[static_cast<size_t>(t.trackIndex)];
+            int& mapped = trackMap[static_cast<size_t>(t.trackIndex)];
+            if (mapped < 0) {
+                Track track;
+                track.name = source.name;
+                track.gainDb = source.gainDb;
+                for (EnvelopePoint point : source.envelope) {
+                    point.frame -= origin;
+                    track.envelope.push_back(point);
+                }
+                preview->tracks.push_back(std::move(track));
+                mapped = static_cast<int>(preview->tracks.size()) - 1;
+            }
+            Track& dest = preview->tracks[static_cast<size_t>(mapped)];
+            for (const Clip& clip : source.clips) {
+                const int64_t start = std::max(clip.startFrame, t.startFrame);
+                const int64_t end = std::min(clip.endFrame(), t.endFrame);
+                if (start >= end || clip.channels <= 0) {
+                    continue;
+                }
+                Clip piece;
+                piece.channels = clip.channels;
+                piece.startFrame = start - origin;
+                piece.samples = clip.samples.slice(static_cast<size_t>(start - clip.startFrame) * static_cast<size_t>(clip.channels),
+                                                   static_cast<size_t>(end - start) * static_cast<size_t>(clip.channels));
+                dest.clips.push_back(std::move(piece));
+            }
+        }
+    }
+    std::vector<GainTarget> previewTargets;
+    for (size_t i = 0; i < preview->tracks.size(); ++i) {
+        Track& track = preview->tracks[i];
+        std::sort(track.clips.begin(), track.clips.end(),
+                  [](const Clip& a, const Clip& b) { return a.startFrame < b.startFrame; });
+        previewTargets.push_back(GainTarget{static_cast<int>(i), 0, track.endFrame()});
+    }
+    applyVoiceChange(*preview, previewTargets, settings);
+    preview->playheadFrame = 0;
+
+    previewProject_ = std::move(preview);
+    std::string error;
+    if (engine_->startPlayback(*previewProject_, error)) {
+        previewActive_ = true;
+        statusLabel_->setText("Previewing voice change...");
+    } else {
+        previewProject_.reset();
+        QMessageBox::warning(this, "Preview failed", QString::fromStdString(error));
+    }
+    if (voiceDialog_ != nullptr) {
+        voiceDialog_->setPreviewPlaying(previewActive_);
+    }
+}
+
+void MainWindow::stopVoicePreview() {
+    if (previewActive_) {
+        engine_->stopPlayback(); // before the project it reads goes away
+        previewActive_ = false;
+        statusLabel_->setText("Stopped");
+    }
+    previewProject_.reset();
+    if (voiceDialog_ != nullptr) {
+        voiceDialog_->setPreviewPlaying(false);
+    }
 }
 
 void MainWindow::onApplyEffect() {
@@ -1407,6 +1546,9 @@ void MainWindow::onSelectionChanged() {
     if (normalizeAction_ != nullptr) {
         normalizeAction_->setEnabled(projectHasAnyContent());
     }
+    if (voiceChangerAction_ != nullptr) {
+        voiceChangerAction_->setEnabled(projectHasAnyContent());
+    }
     if (selectAllAction_ != nullptr) {
         selectAllAction_->setEnabled(projectHasAnyContent());
     }
@@ -1451,6 +1593,9 @@ void MainWindow::onTick() {
     // (it used to stay open until the next Play overwrote and leaked it).
     // Played to the end, the playhead goes back to where playback started,
     // ready to play the same passage again.
+    if (previewActive_ && !engine_->isPlaying()) {
+        stopVoicePreview(); // played to the end: the dialog's button goes back to Preview
+    }
     if (playbackActive_ && !engine_->isPlaying()) {
         stopPlaybackNow();
         project_.playheadFrame = playbackStartFrame_;

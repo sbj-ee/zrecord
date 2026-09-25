@@ -7,6 +7,7 @@
 #include "AudioEngineInterface.h"
 #include "Project.h"
 #include "TrackPanel.h"
+#include "VoiceChanger.h"
 
 class QAction;
 class QComboBox;
@@ -54,6 +55,7 @@ private slots:
     void onFadeIn();
     void onFadeOut();
     void onNormalize();
+    void onVoiceChanger();
     void onAbout();
     void onCrossfade();
     void onApplyEffect();
@@ -100,6 +102,15 @@ public:
 
     void setNormalizeDialogDriverForTest(NormalizeDialogDriver driver) { normalizeDriver_ = std::move(driver); }
 
+    // Same for the Voice Changer dialog. The driver may click Preview; the
+    // preview is stopped when the dialog closes, as with exec().
+    using VoiceChangerDialogDriver = std::function<bool(class VoiceChangerDialog&)>;
+    void setVoiceChangerDialogDriverForTest(VoiceChangerDialogDriver driver) { voiceDriver_ = std::move(driver); }
+    // The temporary project a running preview plays (null when none), and a
+    // way to run the timer tick without waiting for it.
+    const Project* previewProjectForTest() const { return previewActive_ ? previewProject_.get() : nullptr; }
+    void tickForTest() { onTick(); }
+
 protected:
     void closeEvent(QCloseEvent* event) override;
 
@@ -126,6 +137,13 @@ private:
     // (nothing unsaved, saved, or discarded), false if the user cancelled.
     bool confirmDiscardChanges(const QString& action);
     bool saveProjectInteractive();
+    // What Normalize and the Voice Changer act on: the time selection, or
+    // else the clips picked with the Move tool. `scope` describes it.
+    std::vector<GainTarget> editTargets(QString& scope) const;
+    // Voice Changer preview: plays a copy of the targets' audio, processed,
+    // through the normal playback engine, without touching project_.
+    void startVoicePreview(const std::vector<GainTarget>& targets, const VoiceSettings& settings);
+    void stopVoicePreview();
     void markSaved(const QString& path);
     void updateWindowTitle();
 
@@ -142,6 +160,12 @@ private:
     bool settingsDirty_ = false;   // header changes outside the undo stack
     UnsavedChangesPrompt unsavedPrompt_;
     NormalizeDialogDriver normalizeDriver_;
+    VoiceChangerDialogDriver voiceDriver_;
+    // The engine reads the project it plays from the audio thread, so the
+    // preview's project lives here until the preview is stopped.
+    std::unique_ptr<Project> previewProject_;
+    bool previewActive_ = false;
+    class VoiceChangerDialog* voiceDialog_ = nullptr; // open dialog, for preview state
 
     QComboBox* deviceCombo_ = nullptr;
     QComboBox* channelsCombo_ = nullptr;
@@ -172,6 +196,7 @@ private:
     QAction* fadeInAction_ = nullptr;
     QAction* fadeOutAction_ = nullptr;
     QAction* normalizeAction_ = nullptr;
+    QAction* voiceChangerAction_ = nullptr;
     QAction* crossfadeAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
