@@ -1,0 +1,13 @@
+# Read by cpack for every generator (CPACK_PROJECT_CONFIG_FILE).
+#
+# The .deb's Depends come entirely from dpkg-shlibdeps. Without it CPack
+# only warns and produces a package with no library dependencies at all,
+# which installs cleanly and then fails to start. Refuse instead.
+if(CPACK_GENERATOR STREQUAL "DEB")
+    find_program(ZRECORD_DPKG_SHLIBDEPS dpkg-shlibdeps)
+    if(NOT ZRECORD_DPKG_SHLIBDEPS)
+        message(FATAL_ERROR
+            "dpkg-shlibdeps not found: the .deb would have no Depends. "
+            "Install dpkg-dev (sudo apt-get install dpkg-dev) and re-run cpack.")
+    endif()
+endif()

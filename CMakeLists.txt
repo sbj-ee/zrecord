@@ -111,6 +111,11 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Qt6 multi-track audio recorder/editor wit
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "stevebj.ee@gmail.com")
 set(CPACK_DEBIAN_PACKAGE_SECTION "sound")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS YES)
+# The mic volume slider drives PipeWire/PulseAudio through pactl; without it
+# the slider does nothing (recording itself is unaffected).
+set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "pulseaudio-utils")
+configure_file(cmake/CPackProjectConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/CPackProjectConfig.cmake" @ONLY)
+set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_CURRENT_BINARY_DIR}/CPackProjectConfig.cmake")
 set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
 set(CPACK_GENERATOR "DEB")
 
