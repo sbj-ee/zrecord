@@ -36,6 +36,9 @@ QString formatTimecode(double seconds, double stepSeconds) {
 TrackPanel::TrackPanel(QWidget* parent) : QWidget(parent) {
     setMinimumHeight(lanesTop() + kLaneHeight + kScrollBarHeight);
     setMouseTracking(true);
+    // Clicking the timeline focuses it, which is what enables the playhead
+    // keys (Home/End/Left/Right) MainWindow scopes to it.
+    setFocusPolicy(Qt::ClickFocus);
 
     hScroll_ = new QScrollBar(Qt::Horizontal, this);
     connect(hScroll_, &QScrollBar::valueChanged, this, [this](int value) {

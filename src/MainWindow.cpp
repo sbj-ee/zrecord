@@ -211,8 +211,12 @@ void MainWindow::buildUi() {
     undoAction_ = addTool("Undo", "Undo", QKeySequence::Undo);
     redoAction_ = addTool("Redo", "Redo", QKeySequence::Redo);
     toolBar->addSeparator();
-    zoomInAction_ = addTool("Zoom In", "Zoom in", QKeySequence("Ctrl+1"));
-    zoomOutAction_ = addTool("Zoom Out", "Zoom out", QKeySequence("Ctrl+3"));
+    zoomInAction_ = addTool("Zoom In", "Zoom in", QKeySequence("Ctrl+="));
+    zoomOutAction_ = addTool("Zoom Out", "Zoom out", QKeySequence("Ctrl+-"));
+    // The usual zoom keys first (the tooltip and menu show the first), then
+    // Ctrl++ for keyboards where + is unshifted, then the original bindings.
+    zoomInAction_->setShortcuts({QKeySequence("Ctrl+="), QKeySequence("Ctrl++"), QKeySequence("Ctrl+1")});
+    zoomOutAction_->setShortcuts({QKeySequence("Ctrl+-"), QKeySequence("Ctrl+3")});
     zoomFitAction_ = addTool("Zoom Fit", "Zoom to fit whole project", QKeySequence("Ctrl+F"));
 
     // Expanding spacer pins the recording cluster to the right-hand end.
@@ -361,6 +365,30 @@ void MainWindow::buildUi() {
     playAction_ = new QAction("Play / Stop", this);
     playAction_->setShortcut(QKeySequence(Qt::Key_Space));
     connect(playAction_, &QAction::triggered, this, &MainWindow::onTogglePlayback);
+
+    // Playhead keys. Sliders and combo boxes use these keys too, so they are
+    // scoped to the timeline (which takes focus when clicked) rather than
+    // the whole window; the Transport menu entries work from anywhere.
+    auto addPlayheadAction = [&](const QString& text, const QKeySequence& shortcut,
+                                 std::function<int64_t()> target) {
+        auto* action = new QAction(text, this);
+        action->setShortcut(shortcut);
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        trackPanel_->addAction(action);
+        connect(action, &QAction::triggered, this, [this, target] {
+            onSeekRequested(std::max<int64_t>(0, target()));
+            trackPanel_->followPlayhead(project_.playheadFrame);
+        });
+        return action;
+    };
+    const auto oneSecond = [this] { return static_cast<int64_t>(project_.sampleRate); };
+    goToStartAction_ = addPlayheadAction("Go to Start", QKeySequence(Qt::Key_Home), [] { return int64_t(0); });
+    goToEndAction_ = addPlayheadAction("Go to End", QKeySequence(Qt::Key_End),
+                                       [this] { return project_.lengthFrames(); });
+    backOneSecondAction_ = addPlayheadAction("Back 1 Second", QKeySequence(Qt::Key_Left),
+                                             [this, oneSecond] { return project_.playheadFrame - oneSecond(); });
+    forwardOneSecondAction_ = addPlayheadAction("Forward 1 Second", QKeySequence(Qt::Key_Right),
+                                                [this, oneSecond] { return project_.playheadFrame + oneSecond(); });
 
     secondaryRow->addWidget(new QLabel("Export as:"));
     formatCombo_ = new QComboBox();
@@ -561,6 +589,11 @@ void MainWindow::buildMenus() {
     QMenu* transportMenu = menuBar()->addMenu("Trans&port");
     transportMenu->addAction(recordAction_);
     transportMenu->addAction(playAction_);
+    transportMenu->addSeparator();
+    transportMenu->addAction(goToStartAction_);
+    transportMenu->addAction(goToEndAction_);
+    transportMenu->addAction(backOneSecondAction_);
+    transportMenu->addAction(forwardOneSecondAction_);
 
     QMenu* viewMenu = menuBar()->addMenu("&View");
     viewMenu->addAction(selectToolAction_);

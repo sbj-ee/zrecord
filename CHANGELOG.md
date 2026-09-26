@@ -7,6 +7,16 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Playhead keys.** With the timeline focused (click it), Home and End
+  jump the playhead to the start and end of the project, and Left / Right
+  move it by one second. They also seek during playback. The Transport
+  menu lists them. They are scoped to the timeline so a focused slider or
+  list keeps its own arrow keys.
+- **Standard zoom keys.** Zoom In is also Ctrl+= (and Ctrl++), Zoom Out
+  also Ctrl+-; Ctrl+1 and Ctrl+3 still work.
+
 ## [1.0.0] - 2026-09-25
 
 The first stable release.
