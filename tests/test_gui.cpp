@@ -569,6 +569,7 @@ void TestGui::mainWindowAsksBeforeDiscardingUnsavedChanges() {
     QVERIFY(!window.hasUnsavedChanges());
     QVERIFY(!window.isWindowModified());
     QVERIFY(window.windowTitle().startsWith("p"));
+    QVERIFY(window.windowTitle().endsWith("zrecord " ZRECORD_VERSION));
 
     // Undoing past the save point is a change; redoing back to it isn't.
     findAction(window, "Undo")->trigger();
