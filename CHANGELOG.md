@@ -7,6 +7,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The title bar shows the version (for example `Untitled — zrecord 0.3.1`),
+  matching Help > About.
+
 ## [0.3.1] - 2026-09-25
 
 A licensing release: no code changes since 0.3.0.

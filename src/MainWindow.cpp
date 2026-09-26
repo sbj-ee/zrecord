@@ -914,7 +914,7 @@ bool MainWindow::hasUnsavedChanges() const {
 
 void MainWindow::updateWindowTitle() {
     QString name = projectPath_.isEmpty() ? QString("Untitled") : QFileInfo(projectPath_).completeBaseName();
-    setWindowTitle(QString("%1[*] \u2014 zrecord").arg(name));
+    setWindowTitle(QString("%1[*] \u2014 zrecord %2").arg(name, ZRECORD_VERSION));
     setWindowModified(hasUnsavedChanges());
 }
 
