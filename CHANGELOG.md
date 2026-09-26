@@ -7,9 +7,13 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-25
+
+The first stable release.
+
 ### Changed
 
-- The title bar shows the version (for example `Untitled — zrecord 0.3.1`),
+- The title bar shows the version (for example `Untitled — zrecord 1.0.0`),
   matching Help > About.
 
 ## [0.3.1] - 2026-09-25
@@ -247,7 +251,8 @@ makes editing safe.
 - Playback of the current recording, and export to WAV, FLAC, OGG Vorbis or MP3.
 - `.deb` packaging via CPack.
 
-[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/sbj-ee/zrecord/releases/tag/v1.0.0
 [0.3.1]: https://github.com/sbj-ee/zrecord/releases/tag/v0.3.1
 [0.3.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.3.0
 [0.2.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.2.0
