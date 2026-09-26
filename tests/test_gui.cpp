@@ -645,6 +645,9 @@ void TestGui::saveWritesBackToTheProjectsFolder() {
     QVERIFY(dir.isValid());
     const QString path = dir.filePath("p.zrproj");
     MainWindow window(std::make_unique<FakeAudioEngine>());
+    // Regression: bound via QKeySequence::SaveAs, which is empty outside
+    // GNOME/KDE themes (including the offscreen platform these tests use).
+    QCOMPARE(findAction(window, "Save As...")->shortcut(), QKeySequence("Ctrl+Shift+S"));
     Project* project = window.findChild<TrackPanel*>()->projectForTest();
     QString error;
     QVERIFY2(window.saveProjectTo(path, &error), qPrintable(error));

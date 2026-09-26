@@ -262,7 +262,9 @@ void MainWindow::buildUi() {
     connect(saveProjectAction_, &QAction::triggered, this, &MainWindow::onSaveProject);
     // Menu-only: Save covers the common case on the toolbar.
     saveProjectAsAction_ = new QAction("Save As...", this);
-    saveProjectAsAction_->setShortcut(QKeySequence::SaveAs);
+    // Spelled out: QKeySequence::SaveAs is empty unless Qt runs under a
+    // GNOME or KDE platform theme, which left Save As without a key.
+    saveProjectAsAction_->setShortcut(QKeySequence("Ctrl+Shift+S"));
     connect(saveProjectAsAction_, &QAction::triggered, this, &MainWindow::onSaveProjectAs);
     connect(addTrackAction_, &QAction::triggered, this, &MainWindow::onAddTrack);
     connect(removeTrackAction_, &QAction::triggered, this, &MainWindow::onRemoveTrack);

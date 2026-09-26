@@ -7,6 +7,13 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Save As had no keyboard shortcut** on most Linux desktops, despite
+  1.1.0 listing Ctrl+Shift+S. It was bound to Qt's standard Save As key,
+  which is only defined under GNOME or KDE platform themes; it is now
+  bound to Ctrl+Shift+S directly.
+
 ## [1.1.0] - 2026-09-25
 
 An ergonomics release: Save writes in place, Open Recent, a remembered
