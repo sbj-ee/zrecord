@@ -2,6 +2,8 @@
 #include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QUndoStack>
 #include <QtTest>
 
@@ -44,6 +46,7 @@ class TestGui : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void init();
 
     void clickSelectsTheLaneItLandsIn();
@@ -66,6 +69,7 @@ private slots:
     void envelopeDragIsOneUndoableStep();
     void mainWindowAsksBeforeDiscardingUnsavedChanges();
     void saveWritesBackToTheProjectsFolder();
+    void recentProjectsTrackOpensAndSaves();
     void mainWindowRecordsWithTheDevicesChannelCount();
     void playheadFollowsPlayback();
     void recordingStopsPlayback();
@@ -88,6 +92,14 @@ private:
     Project project_;
     TrackPanel panel_;
 };
+
+void TestGui::initTestCase() {
+    // Keep QSettings (recent projects, window geometry) out of the real
+    // ~/.config: test mode points it at ~/.qttest instead.
+    QStandardPaths::setTestModeEnabled(true);
+    QVERIFY2(QSettings().fileName().contains(".qttest"), qPrintable(QSettings().fileName()));
+    QSettings().clear();
+}
 
 void TestGui::init() {
     project_.reset();
@@ -533,6 +545,42 @@ void TestGui::envelopeDragIsOneUndoableStep() {
     QTest::mouseClick(&panel_, Qt::LeftButton, {}, QPoint(x, top + 70));
     QCOMPARE(stack.count(), count);
     panel_.disconnect(&stack);
+}
+
+void TestGui::recentProjectsTrackOpensAndSaves() {
+    QSettings().clear();
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    window.setQuietRecentFailuresForTest(true);
+    QVERIFY(MainWindow::recentProjects().isEmpty());
+
+    QString error;
+    const QString a = dir.filePath("a.zrproj");
+    const QString b = dir.filePath("b.zrproj");
+    QVERIFY2(window.saveProjectTo(a, &error), qPrintable(error));
+    QVERIFY2(window.saveProjectTo(b, &error), qPrintable(error));
+    QCOMPARE(MainWindow::recentProjects(), QStringList({b, a}));
+
+    // Opening an entry moves it to the top rather than duplicating it.
+    QVERIFY(window.openRecentProject(a));
+    QCOMPARE(MainWindow::recentProjects(), QStringList({a, b}));
+
+    // The list is capped, oldest dropped first.
+    for (int i = 0; i < 10; ++i) {
+        QVERIFY(window.saveProjectTo(dir.filePath(QString("p%1.zrproj").arg(i)), &error));
+    }
+    QCOMPARE(MainWindow::recentProjects().size(), 8);
+    QCOMPARE(MainWindow::recentProjects().first(), dir.filePath("p9.zrproj"));
+    QVERIFY(!MainWindow::recentProjects().contains(a));
+
+    // A project that has gone away drops off the list when picked.
+    const QString gone = dir.filePath("p5.zrproj");
+    QVERIFY(QDir(gone).removeRecursively());
+    QVERIFY(!window.openRecentProject(gone));
+    QVERIFY(!MainWindow::recentProjects().contains(gone));
+    QCOMPARE(MainWindow::recentProjects().size(), 7);
+    QSettings().clear();
 }
 
 void TestGui::mainWindowAsksBeforeDiscardingUnsavedChanges() {

@@ -14,6 +14,7 @@ class QComboBox;
 class QPushButton;
 class QToolButton;
 class QLabel;
+class QMenu;
 class QCheckBox;
 class QSlider;
 class QTimer;
@@ -88,6 +89,13 @@ public:
     // Saves to a .zrproj folder and marks the project saved (what File > Save
     // and Save As do once they have a path).
     bool saveProjectTo(const QString& path, QString* error = nullptr);
+
+    // File > Open Recent: the most recently opened or saved project folders,
+    // newest first, kept in QSettings. Opening one asks about unsaved
+    // changes first; one that fails to open is dropped from the list.
+    static QStringList recentProjects();
+    bool openRecentProject(const QString& path);
+    void setQuietRecentFailuresForTest(bool quiet) { quietRecentFailuresForTest_ = quiet; }
     bool hasUnsavedChanges() const;
 
     // What the "unsaved changes" question returns: Save, Discard or Cancel.
@@ -149,6 +157,15 @@ private:
     void startVoicePreview(const std::vector<GainTarget>& targets, const VoiceSettings& settings);
     void stopVoicePreview();
     void markSaved(const QString& path);
+    void addRecentProject(const QString& path);
+    void clearRecentProjects();
+    void rebuildRecentMenu();
+    // Where Open and Save start browsing: the current project's folder, else
+    // the most recent one's, else home.
+    QString lastProjectDir() const;
+    static constexpr int kMaxRecentProjects = 8;
+    static constexpr const char* kRecentProjectsKey = "recentProjects";
+    static constexpr const char* kGeometryKey = "mainWindow/geometry";
     void updateWindowTitle();
 
     Project project_;
@@ -190,6 +207,8 @@ private:
     QAction* openProjectAction_ = nullptr;
     QAction* saveProjectAction_ = nullptr;
     QAction* saveProjectAsAction_ = nullptr;
+    QMenu* recentMenu_ = nullptr;
+    bool quietRecentFailuresForTest_ = false;
     QAction* addTrackAction_ = nullptr;
     QAction* removeTrackAction_ = nullptr;
     QAction* importAction_ = nullptr;

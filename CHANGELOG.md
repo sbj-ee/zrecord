@@ -17,6 +17,14 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Save As** (File menu, Ctrl+Shift+S) saves the project to a new folder.
+- **Open Recent** (File menu) lists the last 8 projects opened or saved,
+  newest first, with a number key for each and Clear Menu. A project that
+  no longer opens drops off the list.
+- **The window remembers its size and position** between runs.
+- Open and Save start browsing in the current (or last-used) project's
+  folder instead of the home folder.
+
+Settings live in `~/.config/zrecord/zrecord.conf`.
 
 ## [1.0.0] - 2026-09-25
 
