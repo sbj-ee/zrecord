@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(zrecord LANGUAGES CXX VERSION 0.3.0)
+project(zrecord LANGUAGES CXX VERSION 0.3.1)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,7 +8,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # Version string. Untagged builds get a development suffix so a .deb or an
-# About box can't be mistaken for the release: 0.3.0+g<short sha>.
+# About box can't be mistaken for the release: 0.3.1+g<short sha>.
 option(ZRECORD_RELEASE "Release build: plain version, no development suffix" OFF)
 set(ZRECORD_VERSION "${PROJECT_VERSION}")
 if(NOT ZRECORD_RELEASE)
