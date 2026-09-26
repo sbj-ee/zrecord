@@ -7,8 +7,22 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Save writes back in place.** File > Save (Ctrl+S) saves an opened or
+  already-saved project to its own folder without a dialog; it only asks
+  for a location the first time. Answering Save to the unsaved-changes
+  question does the same.
+
 ### Added
 
+- **Save As** (File menu, Ctrl+Shift+S) saves the project to a new folder.
+- **Open Recent** (File menu) lists the last 8 projects opened or saved,
+  newest first, with a number key for each and Clear Menu. A project that
+  no longer opens drops off the list.
+- **The window remembers its size and position** between runs.
+- Open and Save start browsing in the current (or last-used) project's
+  folder instead of the home folder.
 - **Playhead keys.** With the timeline focused (click it), Home and End
   jump the playhead to the start and end of the project, and Left / Right
   move it by one second. They also seek during playback. The Transport
@@ -16,6 +30,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   list keeps its own arrow keys.
 - **Standard zoom keys.** Zoom In is also Ctrl+= (and Ctrl++), Zoom Out
   also Ctrl+-; Ctrl+1 and Ctrl+3 still work.
+
+Settings live in `~/.config/zrecord/zrecord.conf`.
 
 ## [1.0.0] - 2026-09-25
 

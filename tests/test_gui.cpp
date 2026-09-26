@@ -2,7 +2,9 @@
 #include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSettings>
 #include <QSlider>
+#include <QStandardPaths>
 #include <QUndoStack>
 #include <QtTest>
 
@@ -45,6 +47,7 @@ class TestGui : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void init();
 
     void clickSelectsTheLaneItLandsIn();
@@ -66,6 +69,8 @@ private slots:
     void mainWindowImportResamplesToTheProjectRate();
     void envelopeDragIsOneUndoableStep();
     void mainWindowAsksBeforeDiscardingUnsavedChanges();
+    void saveWritesBackToTheProjectsFolder();
+    void recentProjectsTrackOpensAndSaves();
     void mainWindowRecordsWithTheDevicesChannelCount();
     void playheadFollowsPlayback();
     void recordingStopsPlayback();
@@ -89,6 +94,14 @@ private:
     Project project_;
     TrackPanel panel_;
 };
+
+void TestGui::initTestCase() {
+    // Keep QSettings (recent projects, window geometry) out of the real
+    // ~/.config: test mode points it at ~/.qttest instead.
+    QStandardPaths::setTestModeEnabled(true);
+    QVERIFY2(QSettings().fileName().contains(".qttest"), qPrintable(QSettings().fileName()));
+    QSettings().clear();
+}
 
 void TestGui::init() {
     project_.reset();
@@ -297,7 +310,7 @@ void TestGui::mainWindowLocksEditingWhileRecording() {
     project->selection.endFrame = 20000;
 
     window.setControlsEnabledForTest(true); // as if a take were running
-    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "New", "Open...", "Save..."}) {
+    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "New", "Open...", "Save", "Save As..."}) {
         QVERIFY2(!actionEnabled(window, name),
                  qPrintable(QString("%1 stayed enabled during recording").arg(name)));
     }
@@ -536,6 +549,42 @@ void TestGui::envelopeDragIsOneUndoableStep() {
     panel_.disconnect(&stack);
 }
 
+void TestGui::recentProjectsTrackOpensAndSaves() {
+    QSettings().clear();
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    window.setQuietRecentFailuresForTest(true);
+    QVERIFY(MainWindow::recentProjects().isEmpty());
+
+    QString error;
+    const QString a = dir.filePath("a.zrproj");
+    const QString b = dir.filePath("b.zrproj");
+    QVERIFY2(window.saveProjectTo(a, &error), qPrintable(error));
+    QVERIFY2(window.saveProjectTo(b, &error), qPrintable(error));
+    QCOMPARE(MainWindow::recentProjects(), QStringList({b, a}));
+
+    // Opening an entry moves it to the top rather than duplicating it.
+    QVERIFY(window.openRecentProject(a));
+    QCOMPARE(MainWindow::recentProjects(), QStringList({a, b}));
+
+    // The list is capped, oldest dropped first.
+    for (int i = 0; i < 10; ++i) {
+        QVERIFY(window.saveProjectTo(dir.filePath(QString("p%1.zrproj").arg(i)), &error));
+    }
+    QCOMPARE(MainWindow::recentProjects().size(), 8);
+    QCOMPARE(MainWindow::recentProjects().first(), dir.filePath("p9.zrproj"));
+    QVERIFY(!MainWindow::recentProjects().contains(a));
+
+    // A project that has gone away drops off the list when picked.
+    const QString gone = dir.filePath("p5.zrproj");
+    QVERIFY(QDir(gone).removeRecursively());
+    QVERIFY(!window.openRecentProject(gone));
+    QVERIFY(!MainWindow::recentProjects().contains(gone));
+    QCOMPARE(MainWindow::recentProjects().size(), 7);
+    QSettings().clear();
+}
+
 void TestGui::mainWindowAsksBeforeDiscardingUnsavedChanges() {
     // Regression: Quit and Open discarded edits silently, and New asked based
     // on "anything ever done" (so it asked right after a save).
@@ -586,6 +635,35 @@ void TestGui::mainWindowAsksBeforeDiscardingUnsavedChanges() {
     QCOMPARE(asked.size(), 1);
     QVERIFY(project->tracks.empty());
     QVERIFY(!window.hasUnsavedChanges());
+}
+
+void TestGui::saveWritesBackToTheProjectsFolder() {
+    // Regression: Save always opened a file dialog, even for a project that
+    // already had a folder. Now it writes back without asking, as does
+    // answering Save to the unsaved-changes question.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("p.zrproj");
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    QString error;
+    QVERIFY2(window.saveProjectTo(path, &error), qPrintable(error));
+
+    findAction(window, "+Track")->trigger();
+    QVERIFY(window.hasUnsavedChanges());
+    findAction(window, "Save")->trigger();
+    QVERIFY(!window.hasUnsavedChanges());
+    Project reloaded;
+    std::string message;
+    QVERIFY2(ProjectFile::load(reloaded, path.toStdString(), message), message.c_str());
+    QCOMPARE(reloaded.tracks.size(), project->tracks.size());
+
+    findAction(window, "+Track")->trigger();
+    window.setUnsavedChangesPromptForTest([](const QString&) { return int(QMessageBox::Save); });
+    findAction(window, "New")->trigger();
+    QVERIFY(project->tracks.empty());
+    QVERIFY2(ProjectFile::load(reloaded, path.toStdString(), message), message.c_str());
+    QCOMPARE(reloaded.tracks.size(), size_t(2));
 }
 
 namespace {
