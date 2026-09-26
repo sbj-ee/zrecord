@@ -7,6 +7,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-25
+
+A licensing release: no code changes since 0.3.0.
+
 ### Added
 
 - **MIT license.** zrecord is now released under the MIT License (see
@@ -238,7 +242,8 @@ makes editing safe.
 - Playback of the current recording, and export to WAV, FLAC, OGG Vorbis or MP3.
 - `.deb` packaging via CPack.
 
-[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/sbj-ee/zrecord/releases/tag/v0.3.1
 [0.3.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.3.0
 [0.2.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.1.0
