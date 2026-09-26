@@ -7,6 +7,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-25
+
+A fix for the Save As shortcut, and the README now lists every keyboard
+shortcut.
+
 ### Fixed
 
 - **Save As had no keyboard shortcut** on most Linux desktops, despite
@@ -289,7 +294,8 @@ makes editing safe.
 - Playback of the current recording, and export to WAV, FLAC, OGG Vorbis or MP3.
 - `.deb` packaging via CPack.
 
-[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/sbj-ee/zrecord/releases/tag/v1.1.1
 [1.1.0]: https://github.com/sbj-ee/zrecord/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sbj-ee/zrecord/releases/tag/v1.0.0
 [0.3.1]: https://github.com/sbj-ee/zrecord/releases/tag/v0.3.1
