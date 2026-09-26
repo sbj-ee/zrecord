@@ -18,6 +18,58 @@ A Qt6 multi-track audio recorder and editor for Linux, with a live input filter 
 - dB peak meter with peak hold and a latching clip light, for recording input and playback
 - Export a mixdown to WAV, FLAC, OGG Vorbis, or MP3 (all via libsndfile)
 
+## Keyboard shortcuts
+
+Every shortcut is also listed next to its entry in the menus.
+
+**Project**
+
+| Key | Action |
+| --- | --- |
+| Ctrl+N | New project |
+| Ctrl+O | Open project (File > Open Recent lists the last 8) |
+| Ctrl+S | Save (asks for a folder only the first time) |
+| Ctrl+Shift+S | Save As |
+| Ctrl+I | Import audio onto the selected track |
+| Ctrl+E | Export a mixdown |
+| Ctrl+Q | Quit |
+
+**Transport**
+
+| Key | Action |
+| --- | --- |
+| R | Start / stop recording |
+| Space | Play / stop from the playhead |
+| Home / End | Playhead to the start / end of the project\* |
+| Left / Right | Playhead back / forward one second\* |
+
+\* Click the timeline first. These keys only work while it has focus, so a focused slider or list keeps its own arrow keys. They seek during playback.
+
+**Editing**
+
+| Key | Action |
+| --- | --- |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / Redo |
+| Ctrl+A | Select all |
+| Ctrl+X / Ctrl+C / Ctrl+V | Cut / Copy / Paste (at the playhead) |
+| Delete | Delete the selection |
+| Ctrl+L | Silence the selection |
+| Ctrl+R | Apply the filter settings to the selection |
+| Ctrl+B | Add a label (selection, or playhead) |
+| Ctrl+Shift+N / Ctrl+Shift+W | Add / remove a track |
+
+**Tools and view**
+
+| Key | Action |
+| --- | --- |
+| F1 / F5 / F2 | Select / Move / Envelope tool |
+| Ctrl+= (or Ctrl++, Ctrl+1) | Zoom in |
+| Ctrl+- (or Ctrl+3) | Zoom out |
+| Ctrl+F | Zoom to fit the project |
+| Ctrl+mouse wheel | Zoom around the pointer |
+| Mouse wheel | Scroll the timeline |
+| Alt while dragging | Bypass snapping |
+
 ## Dependencies
 
 Tested on Ubuntu/Pop!_OS (Debian-based). Install build dependencies:
