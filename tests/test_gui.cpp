@@ -65,6 +65,7 @@ private slots:
     void mainWindowImportResamplesToTheProjectRate();
     void envelopeDragIsOneUndoableStep();
     void mainWindowAsksBeforeDiscardingUnsavedChanges();
+    void saveWritesBackToTheProjectsFolder();
     void mainWindowRecordsWithTheDevicesChannelCount();
     void playheadFollowsPlayback();
     void recordingStopsPlayback();
@@ -295,7 +296,7 @@ void TestGui::mainWindowLocksEditingWhileRecording() {
     project->selection.endFrame = 20000;
 
     window.setControlsEnabledForTest(true); // as if a take were running
-    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "New", "Open...", "Save..."}) {
+    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "New", "Open...", "Save", "Save As..."}) {
         QVERIFY2(!actionEnabled(window, name),
                  qPrintable(QString("%1 stayed enabled during recording").arg(name)));
     }
@@ -584,6 +585,35 @@ void TestGui::mainWindowAsksBeforeDiscardingUnsavedChanges() {
     QCOMPARE(asked.size(), 1);
     QVERIFY(project->tracks.empty());
     QVERIFY(!window.hasUnsavedChanges());
+}
+
+void TestGui::saveWritesBackToTheProjectsFolder() {
+    // Regression: Save always opened a file dialog, even for a project that
+    // already had a folder. Now it writes back without asking, as does
+    // answering Save to the unsaved-changes question.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("p.zrproj");
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    Project* project = window.findChild<TrackPanel*>()->projectForTest();
+    QString error;
+    QVERIFY2(window.saveProjectTo(path, &error), qPrintable(error));
+
+    findAction(window, "+Track")->trigger();
+    QVERIFY(window.hasUnsavedChanges());
+    findAction(window, "Save")->trigger();
+    QVERIFY(!window.hasUnsavedChanges());
+    Project reloaded;
+    std::string message;
+    QVERIFY2(ProjectFile::load(reloaded, path.toStdString(), message), message.c_str());
+    QCOMPARE(reloaded.tracks.size(), project->tracks.size());
+
+    findAction(window, "+Track")->trigger();
+    window.setUnsavedChangesPromptForTest([](const QString&) { return int(QMessageBox::Save); });
+    findAction(window, "New")->trigger();
+    QVERIFY(project->tracks.empty());
+    QVERIFY2(ProjectFile::load(reloaded, path.toStdString(), message), message.c_str());
+    QCOMPARE(reloaded.tracks.size(), size_t(2));
 }
 
 namespace {

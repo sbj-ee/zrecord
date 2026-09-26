@@ -7,6 +7,17 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Save writes back in place.** File > Save (Ctrl+S) saves an opened or
+  already-saved project to its own folder without a dialog; it only asks
+  for a location the first time. Answering Save to the unsaved-changes
+  question does the same.
+
+### Added
+
+- **Save As** (File menu, Ctrl+Shift+S) saves the project to a new folder.
+
 ## [1.0.0] - 2026-09-25
 
 The first stable release.
