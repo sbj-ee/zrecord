@@ -3,6 +3,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
+#include <QSlider>
 #include <QStandardPaths>
 #include <QUndoStack>
 #include <QtTest>
@@ -87,6 +88,7 @@ private slots:
     void mainWindowMetersPlayback();
     void repaintDoesNotWaitForTheProjectMutex();
     void aboutShowsTheBuildVersion();
+    void playheadKeysMoveThePlayhead();
 
 private:
     Project project_;
@@ -1054,6 +1056,47 @@ void TestGui::repaintDoesNotWaitForTheProjectMutex() {
     for (Track& track : project_.tracks) {
         track.display = TrackDisplay::Waveform;
     }
+}
+
+void TestGui::playheadKeysMoveThePlayhead() {
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* panel = window.findChild<TrackPanel*>();
+    Project* project = panel->projectForTest();
+    project->sampleRate = 44100.0;
+    Track track;
+    track.clips.push_back(makeClip(0, 441000)); // 10 s
+    project->tracks.push_back(std::move(track));
+
+    // The keys are scoped to the timeline, so a focused slider keeps them.
+    panel->setFocus();
+    QTRY_VERIFY(panel->hasFocus());
+    QTest::keyClick(&window, Qt::Key_End);
+    QCOMPARE(project->playheadFrame, int64_t(441000));
+    QTest::keyClick(&window, Qt::Key_Left);
+    QCOMPARE(project->playheadFrame, int64_t(441000 - 44100));
+    QTest::keyClick(&window, Qt::Key_Right);
+    QCOMPARE(project->playheadFrame, int64_t(441000));
+    QTest::keyClick(&window, Qt::Key_Home);
+    QCOMPARE(project->playheadFrame, int64_t(0));
+    QTest::keyClick(&window, Qt::Key_Left); // clamped at the start
+    QCOMPARE(project->playheadFrame, int64_t(0));
+
+    auto* slider = window.findChild<QSlider*>();
+    QVERIFY(slider != nullptr);
+    slider->setFocus();
+    QTRY_VERIFY(slider->hasFocus());
+    QTest::keyClick(&window, Qt::Key_End);
+    QCOMPARE(project->playheadFrame, int64_t(0));
+
+    // Both the familiar zoom keys and the original ones are bound.
+    const QList<QKeySequence> zoomIn = findAction(window, "Zoom In")->shortcuts();
+    QVERIFY(zoomIn.contains(QKeySequence("Ctrl+=")));
+    QVERIFY(zoomIn.contains(QKeySequence("Ctrl+1")));
+    const QList<QKeySequence> zoomOut = findAction(window, "Zoom Out")->shortcuts();
+    QVERIFY(zoomOut.contains(QKeySequence("Ctrl+-")));
+    QVERIFY(zoomOut.contains(QKeySequence("Ctrl+3")));
 }
 
 void TestGui::aboutShowsTheBuildVersion() {

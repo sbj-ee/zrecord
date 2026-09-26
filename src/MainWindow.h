@@ -240,6 +240,11 @@ private:
     // in sync with the buttons in setControlsEnabled().
     QAction* recordAction_ = nullptr;
     QAction* playAction_ = nullptr;
+    // Playhead movement; the shortcuts work while the timeline has focus.
+    QAction* goToStartAction_ = nullptr;
+    QAction* goToEndAction_ = nullptr;
+    QAction* backOneSecondAction_ = nullptr;
+    QAction* forwardOneSecondAction_ = nullptr;
     QAction* exportAction_ = nullptr;
     QAction* applyEffectAction_ = nullptr;
     QAction* quitAction_ = nullptr;
