@@ -7,6 +7,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-25
+
+An ergonomics release: Save writes in place, Open Recent, a remembered
+window, and keyboard control of the playhead and zoom.
+
 ### Changed
 
 - **Save writes back in place.** File > Save (Ctrl+S) saves an opened or
@@ -277,7 +282,8 @@ makes editing safe.
 - Playback of the current recording, and export to WAV, FLAC, OGG Vorbis or MP3.
 - `.deb` packaging via CPack.
 
-[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/sbj-ee/zrecord/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sbj-ee/zrecord/releases/tag/v1.0.0
 [0.3.1]: https://github.com/sbj-ee/zrecord/releases/tag/v0.3.1
 [0.3.0]: https://github.com/sbj-ee/zrecord/releases/tag/v0.3.0
