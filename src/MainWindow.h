@@ -44,6 +44,7 @@ private slots:
     void onNewProject();
     void onOpenProject();
     void onSaveProject();
+    void onSaveProjectAs();
     void onAddTrack();
     void onRemoveTrack();
     void onImportAudio();
@@ -86,7 +87,7 @@ public:
     bool importAudioFile(const QString& path, QString* error = nullptr, QString* note = nullptr);
 
     // Saves to a .zrproj folder and marks the project saved (what File > Save
-    // does after its dialog).
+    // and Save As do once they have a path).
     bool saveProjectTo(const QString& path, QString* error = nullptr);
 
     // File > Open Recent: the most recently opened or saved project folders,
@@ -144,7 +145,10 @@ private:
     // Asks before `action` would discard unsaved changes. True to go ahead
     // (nothing unsaved, saved, or discarded), false if the user cancelled.
     bool confirmDiscardChanges(const QString& action);
-    bool saveProjectInteractive();
+    // Save writes back to the project's own folder, asking for one only if
+    // it has none yet; Save As always asks. Both report failures in a box.
+    bool saveProject();
+    bool saveProjectAs();
     // What Normalize and the Voice Changer act on: the time selection, or
     // else the clips picked with the Move tool. `scope` describes it.
     std::vector<GainTarget> editTargets(QString& scope) const;
@@ -202,6 +206,7 @@ private:
     QAction* newProjectAction_ = nullptr;
     QAction* openProjectAction_ = nullptr;
     QAction* saveProjectAction_ = nullptr;
+    QAction* saveProjectAsAction_ = nullptr;
     QMenu* recentMenu_ = nullptr;
     bool quietRecentFailuresForTest_ = false;
     QAction* addTrackAction_ = nullptr;

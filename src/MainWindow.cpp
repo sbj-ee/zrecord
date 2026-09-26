@@ -191,7 +191,7 @@ void MainWindow::buildUi() {
 
     newProjectAction_ = addTool("New", "New project", QKeySequence::New);
     openProjectAction_ = addTool("Open...", "Open project", QKeySequence::Open);
-    saveProjectAction_ = addTool("Save...", "Save project", QKeySequence::Save);
+    saveProjectAction_ = addTool("Save", "Save project", QKeySequence::Save);
     toolBar->addSeparator();
     addTrackAction_ = addTool("+Track", "Add track", QKeySequence("Ctrl+Shift+N"));
     removeTrackAction_ = addTool("-Track", "Remove selected (or last) track", QKeySequence("Ctrl+Shift+W"));
@@ -256,6 +256,10 @@ void MainWindow::buildUi() {
     connect(newProjectAction_, &QAction::triggered, this, &MainWindow::onNewProject);
     connect(openProjectAction_, &QAction::triggered, this, &MainWindow::onOpenProject);
     connect(saveProjectAction_, &QAction::triggered, this, &MainWindow::onSaveProject);
+    // Menu-only: Save covers the common case on the toolbar.
+    saveProjectAsAction_ = new QAction("Save As...", this);
+    saveProjectAsAction_->setShortcut(QKeySequence::SaveAs);
+    connect(saveProjectAsAction_, &QAction::triggered, this, &MainWindow::onSaveProjectAs);
     connect(addTrackAction_, &QAction::triggered, this, &MainWindow::onAddTrack);
     connect(removeTrackAction_, &QAction::triggered, this, &MainWindow::onRemoveTrack);
     connect(importAction_, &QAction::triggered, this, &MainWindow::onImportAudio);
@@ -528,6 +532,7 @@ void MainWindow::buildMenus() {
     connect(recentMenu_, &QMenu::aboutToShow, this, &MainWindow::rebuildRecentMenu);
     rebuildRecentMenu(); // so a first-run empty list shows as disabled
     fileMenu->addAction(saveProjectAction_);
+    fileMenu->addAction(saveProjectAsAction_);
     fileMenu->addSeparator();
     fileMenu->addAction(importAction_);
     fileMenu->addAction(exportAction_);
@@ -707,7 +712,7 @@ void MainWindow::setControlsEnabled(bool recording) {
 
     // Editing the timeline while the input stream is live would race the
     // take that's being captured, so gate those on recording too.
-    for (QAction* action : {newProjectAction_, openProjectAction_, saveProjectAction_,
+    for (QAction* action : {newProjectAction_, openProjectAction_, saveProjectAction_, saveProjectAsAction_,
                              addTrackAction_, removeTrackAction_, importAction_,
                              cutAction_, copyAction_, pasteAction_, deleteAction_,
                              silenceAction_, fadeInAction_, fadeOutAction_, crossfadeAction_,
@@ -952,7 +957,7 @@ bool MainWindow::confirmDiscardChanges(const QString& action) {
             QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
     }
     if (answer == QMessageBox::Save) {
-        return saveProjectInteractive();
+        return saveProject();
     }
     return answer == QMessageBox::Discard;
 }
@@ -1079,10 +1084,27 @@ bool MainWindow::openProjectFolder(const QString& path, QString* error) {
 }
 
 void MainWindow::onSaveProject() {
-    saveProjectInteractive();
+    saveProject();
 }
 
-bool MainWindow::saveProjectInteractive() {
+void MainWindow::onSaveProjectAs() {
+    saveProjectAs();
+}
+
+bool MainWindow::saveProject() {
+    if (projectPath_.isEmpty()) {
+        return saveProjectAs();
+    }
+    QString error;
+    if (!saveProjectTo(projectPath_, &error)) {
+        QMessageBox::warning(this, "Save failed", error);
+        return false;
+    }
+    statusLabel_->setText("Saved to " + projectPath_);
+    return true;
+}
+
+bool MainWindow::saveProjectAs() {
     QString defaultPath = projectPath_.isEmpty() ? lastProjectDir() + "/untitled.zrproj" : projectPath_;
     QString path = QFileDialog::getSaveFileName(this, "Save Project", defaultPath, "zrecord Project (*.zrproj)");
     if (path.isEmpty()) {
