@@ -27,6 +27,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSlider>
 #include <QTimer>
 #include <QToolBar>
@@ -82,6 +83,8 @@ MainWindow::MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* pa
         updateWindowTitle();
     });
     updateWindowTitle();
+
+    restoreGeometry(QSettings().value(kGeometryKey).toByteArray());
 }
 
 MainWindow::~MainWindow() {
@@ -520,6 +523,10 @@ void MainWindow::buildMenus() {
     QMenu* fileMenu = menuBar()->addMenu("&File");
     fileMenu->addAction(newProjectAction_);
     fileMenu->addAction(openProjectAction_);
+    // Rebuilt each time it opens, so it always reflects the saved list.
+    recentMenu_ = fileMenu->addMenu("Open &Recent");
+    connect(recentMenu_, &QMenu::aboutToShow, this, &MainWindow::rebuildRecentMenu);
+    rebuildRecentMenu(); // so a first-run empty list shows as disabled
     fileMenu->addAction(saveProjectAction_);
     fileMenu->addSeparator();
     fileMenu->addAction(importAction_);
@@ -707,6 +714,9 @@ void MainWindow::setControlsEnabled(bool recording) {
                              applyEffectAction_, addLabelAction_, selectAllAction_, normalizeAction_,
                              voiceChangerAction_}) {
         action->setEnabled(!recording);
+    }
+    if (recentMenu_ != nullptr) {
+        recentMenu_->setEnabled(!recording && !recentProjects().isEmpty());
     }
     if (!recording) {
         onSelectionChanged(); // restore selection-dependent enablement
@@ -920,6 +930,9 @@ void MainWindow::updateWindowTitle() {
 
 void MainWindow::markSaved(const QString& path) {
     projectPath_ = path;
+    if (!path.isEmpty()) {
+        addRecentProject(path);
+    }
     settingsDirty_ = false;
     undoStack_->setClean();
     updateWindowTitle();
@@ -953,6 +966,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
     stopPlaybackNow();
+    QSettings().setValue(kGeometryKey, saveGeometry());
     event->accept();
 }
 
@@ -960,7 +974,7 @@ void MainWindow::onOpenProject() {
     if (!confirmDiscardChanges("opening another project")) {
         return;
     }
-    QString dirPath = QFileDialog::getExistingDirectory(this, "Open Project (select a .zrproj folder)", QDir::homePath());
+    QString dirPath = QFileDialog::getExistingDirectory(this, "Open Project (select a .zrproj folder)", lastProjectDir());
     if (dirPath.isEmpty()) {
         return;
     }
@@ -968,6 +982,80 @@ void MainWindow::onOpenProject() {
     if (!openProjectFolder(dirPath, &error)) {
         QMessageBox::warning(this, "Open failed", error);
     }
+}
+
+QStringList MainWindow::recentProjects() {
+    return QSettings().value(kRecentProjectsKey).toStringList();
+}
+
+void MainWindow::addRecentProject(const QString& path) {
+    const QString absolute = QFileInfo(path).absoluteFilePath();
+    QStringList list = recentProjects();
+    list.removeAll(absolute);
+    list.prepend(absolute);
+    while (list.size() > kMaxRecentProjects) {
+        list.removeLast();
+    }
+    QSettings().setValue(kRecentProjectsKey, list);
+    if (recentMenu_ != nullptr) {
+        recentMenu_->setEnabled(!engine_->isRecording());
+    }
+}
+
+void MainWindow::clearRecentProjects() {
+    QSettings().remove(kRecentProjectsKey);
+    if (recentMenu_ != nullptr) {
+        recentMenu_->setEnabled(false);
+    }
+}
+
+void MainWindow::rebuildRecentMenu() {
+    recentMenu_->clear();
+    const QStringList list = recentProjects();
+    for (int i = 0; i < list.size(); ++i) {
+        const QString& path = list[i];
+        // "&1 name" gives each entry a number key while the menu is open.
+        QAction* action = recentMenu_->addAction(
+            QString("&%1 %2").arg(i + 1).arg(QFileInfo(path).completeBaseName()));
+        action->setStatusTip(path);
+        action->setToolTip(path);
+        connect(action, &QAction::triggered, this, [this, path] { openRecentProject(path); });
+    }
+    recentMenu_->setToolTipsVisible(true);
+    recentMenu_->addSeparator();
+    QAction* clear = recentMenu_->addAction("Clear Menu");
+    clear->setEnabled(!list.isEmpty());
+    connect(clear, &QAction::triggered, this, &MainWindow::clearRecentProjects);
+    recentMenu_->setEnabled(!list.isEmpty() && !engine_->isRecording());
+}
+
+bool MainWindow::openRecentProject(const QString& path) {
+    if (!confirmDiscardChanges("opening another project")) {
+        return false;
+    }
+    QString error;
+    if (!openProjectFolder(path, &error)) {
+        // A project that can't be opened (moved, deleted) drops off the list.
+        QStringList list = recentProjects();
+        list.removeAll(path);
+        QSettings().setValue(kRecentProjectsKey, list);
+        if (!quietRecentFailuresForTest_) {
+            QMessageBox::warning(this, "Open failed", error);
+        }
+        return false;
+    }
+    return true;
+}
+
+QString MainWindow::lastProjectDir() const {
+    const QString source = projectPath_.isEmpty() ? recentProjects().value(0) : projectPath_;
+    if (!source.isEmpty()) {
+        const QDir parent = QFileInfo(source).absoluteDir();
+        if (parent.exists()) {
+            return parent.absolutePath();
+        }
+    }
+    return QDir::homePath();
 }
 
 bool MainWindow::openProjectFolder(const QString& path, QString* error) {
@@ -995,7 +1083,7 @@ void MainWindow::onSaveProject() {
 }
 
 bool MainWindow::saveProjectInteractive() {
-    QString defaultPath = projectPath_.isEmpty() ? QDir::homePath() + "/untitled.zrproj" : projectPath_;
+    QString defaultPath = projectPath_.isEmpty() ? lastProjectDir() + "/untitled.zrproj" : projectPath_;
     QString path = QFileDialog::getSaveFileName(this, "Save Project", defaultPath, "zrecord Project (*.zrproj)");
     if (path.isEmpty()) {
         return false;
