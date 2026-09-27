@@ -59,6 +59,7 @@ pkg_check_modules(SAMPLERATE REQUIRED IMPORTED_TARGET samplerate)
 add_library(zrecord_core STATIC
     src/AudioEngine.cpp
     src/Filters.cpp
+    src/Capture.cpp
     src/Fft.cpp
     src/AudioFileWriter.cpp
     src/AudioFileReader.cpp

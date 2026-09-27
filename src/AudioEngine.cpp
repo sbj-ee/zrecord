@@ -117,6 +117,7 @@ void AudioEngine::stopRecording() {
     }
     recording_ = false;
     meterPeak_.store(0.0f, std::memory_order_relaxed);
+    inputPeak_.store(0.0f, std::memory_order_relaxed);
 }
 
 bool AudioEngine::isRecording() const {
@@ -259,14 +260,28 @@ bool AudioEngine::capturedOverrun() const {
     return captureRing_.overran();
 }
 
+void AudioEngine::setInputGainDb(double db) {
+    db = std::clamp(db, kInputGainMinDb, kInputGainMaxDb);
+    inputGainDb_.store(db, std::memory_order_relaxed);
+    inputGain_.store(static_cast<float>(inputGainToLinear(db)), std::memory_order_relaxed);
+}
+
+double AudioEngine::inputGainDb() const {
+    return inputGainDb_.load(std::memory_order_relaxed);
+}
+
 float AudioEngine::takeMeterPeak() {
     return meterPeak_.exchange(0.0f, std::memory_order_relaxed);
 }
 
-void AudioEngine::raiseMeterPeak(float peak) {
+float AudioEngine::takeInputPeak() {
+    return inputPeak_.exchange(0.0f, std::memory_order_relaxed);
+}
+
+void AudioEngine::raisePeak(std::atomic<float>& target, float peak) {
     // Lock-free max; called from the audio callbacks.
-    float current = meterPeak_.load(std::memory_order_relaxed);
-    while (peak > current && !meterPeak_.compare_exchange_weak(current, peak, std::memory_order_relaxed)) {
+    float current = target.load(std::memory_order_relaxed);
+    while (peak > current && !target.compare_exchange_weak(current, peak, std::memory_order_relaxed)) {
     }
 }
 
@@ -329,7 +344,8 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
     const size_t channels = static_cast<size_t>(channels_);
     const size_t sliceFrames = scratch_.size() / channels;
     const bool muted = input == nullptr || inputMuted_.load(std::memory_order_relaxed);
-    float peak = 0.0f;
+    const float gain = inputGain_.load(std::memory_order_relaxed);
+    CapturePeaks peaks;
     for (size_t done = 0; done < frameCount && sliceFrames > 0; done += sliceFrames) {
         const size_t frames = std::min(sliceFrames, static_cast<size_t>(frameCount) - done);
         const size_t count = frames * channels;
@@ -340,14 +356,17 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
             // silence, and the level meter correctly reads zero.
             std::fill_n(scratch_.begin(), count, 0.0f);
         }
-        for (size_t i = 0; i < count; ++i) {
-            peak = std::max(peak, std::fabs(scratch_[i]));
-        }
-        filterChain_.process(scratch_, frames);
+        // Input gain, then the filter chain. The meter follows what is
+        // recorded, so gain or an effect that pushes the take past full scale
+        // shows up (and lights CLIP) instead of hiding behind the raw level.
+        const CapturePeaks block = processCaptureBlock(scratch_, frames, channels_, gain, filterChain_);
+        peaks.input = std::max(peaks.input, block.input);
+        peaks.recorded = std::max(peaks.recorded, block.recorded);
         captureRing_.write(scratch_.data(), count);
     }
 
-    raiseMeterPeak(peak);
+    raiseMeterPeak(peaks.recorded);
+    raisePeak(inputPeak_, peaks.input);
     return paContinue;
 }
 

@@ -8,6 +8,7 @@
 #include <portaudio.h>
 
 #include "AudioEngineInterface.h"
+#include "Capture.h"
 #include "Filters.h"
 #include "PlaybackMixer.h"
 #include "RingBuffer.h"
@@ -59,7 +60,10 @@ public:
     void setFilterSettings(const FilterSettings& settings) override;
     FilterSettings filterSettings() const;
 
+    void setInputGainDb(double db) override;
+    double inputGainDb() const override;
     float takeMeterPeak() override;
+    float takeInputPeak() override;
     double capturedSeconds() const override;
     size_t capturedFrameCount() const;
 
@@ -124,7 +128,11 @@ private:
     std::atomic<bool> playbackFinished_{false}; // set by the audio thread at the end
 
     std::atomic<float> meterPeak_{0.0f}; // max since the UI last took it
-    void raiseMeterPeak(float peak);
+    std::atomic<float> inputPeak_{0.0f}; // raw input max since the UI last took it
+    std::atomic<double> inputGainDb_{0.0};
+    std::atomic<float> inputGain_{1.0f}; // linear, read by the audio thread
+    static void raisePeak(std::atomic<float>& target, float peak);
+    void raiseMeterPeak(float peak) { raisePeak(meterPeak_, peak); }
     std::atomic<bool> recording_{false};
     std::atomic<bool> inputMuted_{false};
 
