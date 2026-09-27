@@ -16,6 +16,7 @@ class QToolButton;
 class QLabel;
 class QMenu;
 class QCheckBox;
+class QDoubleSpinBox;
 class QSlider;
 class QTimer;
 class QUndoStack;
@@ -166,6 +167,7 @@ private:
     static constexpr int kMaxRecentProjects = 8;
     static constexpr const char* kRecentProjectsKey = "recentProjects";
     static constexpr const char* kGeometryKey = "mainWindow/geometry";
+    static constexpr const char* kInputGainKey = "input/gainDb";
     void updateWindowTitle();
 
     Project project_;
@@ -195,6 +197,15 @@ private:
 
     QSlider* micVolumeSlider_ = nullptr;
     QLabel* micVolumeValueLabel_ = nullptr;
+    // Digital input gain (dB, default 0), applied before the filter chain and
+    // kept in QSettings: it belongs to the input setup, not to a project.
+    QDoubleSpinBox* inputGainSpin_ = nullptr;
+    // Latching "the input itself clipped" light: the raw signal reached full
+    // scale before any gain, so turning the gain down can't fix that take.
+    // Click to clear; each new take starts it dark.
+    QToolButton* inputClipIndicator_ = nullptr;
+    void setInputClipLit(bool lit);
+    void showMicVolume(int percent);
 
     QPushButton* recordButton_ = nullptr;
     QPushButton* playButton_ = nullptr;
