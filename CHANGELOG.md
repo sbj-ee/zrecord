@@ -7,6 +7,31 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The level meter now shows what is recorded.** While recording it
+  measured the raw input, before the live Gain stage and effects. With Gain
+  at +12 dB, a -6 dBFS input was recorded at +6 dBFS (hard-clipped on
+  playback and export) while the meter read -6 dBFS and CLIP stayed dark.
+  Echo's extra ~5 dB went unseen the same way. The meter and its CLIP light
+  now follow the take itself, after input gain and the filter chain. At the
+  default settings the capture path is exactly unity gain, as before; that
+  is now covered by tests, including real PortAudio captures at -12, -6 and
+  0 dBFS.
+
+### Added
+
+- **Input gain** (next to the mic volume): a digital gain in dB applied to
+  the recording before the filters. The default, 0 dB, records exactly what
+  the input delivers. It is remembered between sessions.
+- **INPUT CLIP light.** It comes on when the input itself reaches full
+  scale before any gain in zrecord (the clipping is already in the signal:
+  lower the interface gain or the mic volume). It latches until clicked,
+  and each take starts with it dark.
+- **Mic volume above 100% is flagged.** The percentage turns amber, and its
+  tooltip explains that the system is boosting the input in software, which
+  easily clips a loud source before zrecord receives it.
+
 ## [1.1.1] - 2026-09-25
 
 A fix for the Save As shortcut, and the README now lists every keyboard

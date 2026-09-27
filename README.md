@@ -10,12 +10,12 @@ A Qt6 multi-track audio recorder and editor for Linux, with a live input filter 
 - Move clips between tracks, per-track volume envelopes, labels, and a spectrogram view
 - Import existing audio files (WAV, FLAC, OGG, AIFF, ...) onto a track, resampled to the project rate
 - Save/open a project (tracks, clips, and their timeline positions) as a `*.zrproj` folder; reopening restores it exactly, and saving is atomic
-- Mic input volume control (adjusts the system source volume via PipeWire/PulseAudio)
+- Mic input volume control (adjusts the system source volume via PipeWire/PulseAudio; flagged above 100%), a digital input gain in dB (default 0 dB), and an INPUT CLIP light for input that is already clipped
 - Live filter chain applied while recording: gain, high-pass, low-pass, noise gate (with attack/release), compressor, limiter
 - Selectable voice effects: Robot Voice, Echo, Deep Voice, Chipmunk, Distortion
 - Voice Changer (Edit menu): pitch shift in semitones that keeps the length, with an independent formant control, Deeper/Higher/Robot/Chipmunk/Custom presets, and a Preview before Apply (one undo step)
 - Playback of the mixed project with a moving playhead; click the ruler to seek, stopped or playing
-- dB peak meter with peak hold and a latching clip light, for recording input and playback
+- dB peak meter with peak hold and a latching clip light: what is being recorded (after input gain and live filters), or the playback mix
 - Export a mixdown to WAV, FLAC, OGG Vorbis, or MP3 (all via libsndfile)
 
 ## Keyboard shortcuts
