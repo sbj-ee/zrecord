@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
+
+#include <unistd.h>
 
 namespace zrecord {
 
@@ -32,6 +36,9 @@ AudioEngine::~AudioEngine() {
     stopRecording();
     stopPlayback();
     Pa_Terminate();
+    if (!tempTakePath_.empty()) {
+        std::remove(tempTakePath_.c_str());
+    }
 }
 
 std::vector<AudioDeviceInfo> AudioEngine::listInputDevices() const {
@@ -74,8 +81,6 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
 
     // All of this happens before the stream starts, so the audio thread is not
     // running yet and none of it needs guarding.
-    captureBuffer_.clear();
-    consumedOffset_ = 0;
     inputMeterFeed_.reset(channels_);
     discardMeterBlocks(inputMeterQueue_); // nothing stale from a previous take
     inputMeterTail_ = MeterBlock{};
@@ -83,11 +88,36 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
     inputClipEvents_.store(0, std::memory_order_relaxed);
     inputClippedSamples_.store(0, std::memory_order_relaxed);
 
-    // Ten seconds of headroom: the UI drains every 50 ms, so this only runs
-    // out if the UI thread is wedged, and then the overrun flag reports it.
+    // Ten seconds of headroom: the writer thread drains every 10 ms, so this
+    // only runs out if the disk stalls for that long, and then the lost
+    // blocks are padded and labelled as dropouts.
     const size_t ringFrames = static_cast<size_t>(sampleRate_ * 10.0);
     captureRing_.reset(ringFrames * static_cast<size_t>(channels_));
     captureWriter_.reset(&captureRing_, channels_, sampleRate_);
+
+    // The take file, opened before the stream so a folder that can't be
+    // written is reported now rather than lost later.
+    if (!tempTakePath_.empty()) {
+        std::remove(tempTakePath_.c_str());
+        tempTakePath_.clear();
+    }
+    std::string takePath = nextTakePath_;
+    nextTakePath_.clear();
+    if (takePath.empty()) {
+        static int serial = 0;
+        std::error_code ec;
+        const std::filesystem::path tmp = std::filesystem::temp_directory_path(ec);
+        takePath = ((ec ? std::filesystem::path("/tmp") : tmp) /
+                    ("zrecord-take-" + std::to_string(::getpid()) + "-" + std::to_string(++serial) + ".wav"))
+                       .string();
+        tempTakePath_ = takePath;
+    }
+    const int64_t failAfter = failTakeAfterBytes_;
+    failTakeAfterBytes_ = -1;
+    if (!takeWriter_.start(&captureRing_, takePath, channels_, static_cast<int>(sampleRate_), errorMessage,
+                           takeWriterOptions_, failAfter)) {
+        return false;
+    }
     injectedInputLoss_.store(0, std::memory_order_relaxed);
     // paFramesPerBufferUnspecified means the host picks; size the scratch
     // generously and grow it in the callback only if the host ever exceeds it.
@@ -107,6 +137,7 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
     if (err != paNoError) {
         errorMessage = Pa_GetErrorText(err);
         inputStream_ = nullptr;
+        takeWriter_.stop(0);
         return false;
     }
 
@@ -115,6 +146,7 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
         errorMessage = Pa_GetErrorText(err);
         Pa_CloseStream(inputStream_);
         inputStream_ = nullptr;
+        takeWriter_.stop(0);
         return false;
     }
 
@@ -131,10 +163,9 @@ void AudioEngine::stopRecording() {
         MeterBlock tail;
         if (inputMeterFeed_.takePending(tail)) inputMeterTail_.merge(tail);
         // Silence still owed for the last losses completes the take, so its
-        // length matches the time it covered.
-        const int64_t owed = captureWriter_.finish();
-        drainCapture();
-        captureBuffer_.insert(captureBuffer_.end(), static_cast<size_t>(owed) * static_cast<size_t>(channels_), 0.0f);
+        // length matches the time it covered. The writer drains what's left
+        // in the ring, appends that, finalizes the header and stops.
+        takeWriter_.stop(captureWriter_.finish());
     }
     recording_ = false;
 }
@@ -259,10 +290,6 @@ bool AudioEngine::isPlaying() const {
     return Pa_IsStreamActive(outputStream_) == 1;
 }
 
-void AudioEngine::drainCapture() {
-    captureRing_.readAll(captureBuffer_);
-}
-
 bool AudioEngine::capturedOverrun() const {
     return captureRing_.overran();
 }
@@ -304,28 +331,33 @@ InputClipStats AudioEngine::inputClipStats() const {
 }
 
 double AudioEngine::capturedSeconds() const {
-    const_cast<AudioEngine*>(this)->drainCapture();
-    if (channels_ <= 0 || sampleRate_ <= 0.0) {
+    if (sampleRate_ <= 0.0) {
         return 0.0;
     }
-    return static_cast<double>(captureBuffer_.size()) / (channels_ * sampleRate_);
+    return static_cast<double>(captureWriter_.timelineFrames()) / sampleRate_;
 }
 
 size_t AudioEngine::capturedFrameCount() const {
-    const_cast<AudioEngine*>(this)->drainCapture();
-    return channels_ > 0 ? captureBuffer_.size() / static_cast<size_t>(channels_) : 0;
+    return static_cast<size_t>(captureWriter_.timelineFrames());
+}
+
+TakeFileStatus AudioEngine::takeFileStatus() const {
+    TakeFileStatus status;
+    status.path = takeWriter_.path();
+    status.failed = takeWriter_.failed();
+    status.error = takeWriter_.errorMessage();
+    status.framesOnDisk = takeWriter_.framesOnDisk();
+    status.framesInMemory = takeWriter_.tailFrames();
+    status.framesDropped = takeWriter_.framesDroppedAfterFailure();
+    return status;
 }
 
 std::vector<float> AudioEngine::copyCapturedBuffer() const {
-    const_cast<AudioEngine*>(this)->drainCapture();
-    return captureBuffer_;
-}
-
-std::vector<float> AudioEngine::consumeNewSamples() {
-    drainCapture();
-    std::vector<float> result(captureBuffer_.begin() + static_cast<long>(consumedOffset_), captureBuffer_.end());
-    consumedOffset_ = captureBuffer_.size();
-    return result;
+    if (takeWriter_.running()) {
+        return {}; // only once the take is finished
+    }
+    std::string error;
+    return takeWriter_.readTake(error);
 }
 
 int AudioEngine::inputCallbackStatic(const void* input, void* /*output*/, unsigned long frameCount,
@@ -344,9 +376,10 @@ int AudioEngine::outputCallbackStatic(const void* /*input*/, void* output, unsig
 }
 
 int AudioEngine::handleInput(const float* input, unsigned long frameCount, bool overflow, double adcTime) {
-    // Real-time thread. No allocation, no blocking lock, no unbounded growth:
-    // the scratch block is preallocated, the input gain is an atomic, and the
-    // samples leave via a lock-free ring the UI drains.
+    // Real-time thread. No allocation, no blocking lock, no unbounded growth,
+    // no disk I/O: the scratch block is preallocated, the input gain is an
+    // atomic, and the samples leave via a lock-free ring the take writer
+    // thread drains to disk.
 
     // Input the host dropped before this callback (paInputOverflow) becomes
     // silence of the measured length, ahead of this block.

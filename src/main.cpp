@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QTimer>
 
 #include "MainWindow.h"
 #include "zrecord_version.h"
@@ -13,6 +14,8 @@ int main(int argc, char** argv) {
 
     zrecord::MainWindow window;
     window.show();
+    // Once the window is up: offer to restore work a crash left behind.
+    QTimer::singleShot(0, &window, &zrecord::MainWindow::offerRecovery);
 
     return app.exec();
 }

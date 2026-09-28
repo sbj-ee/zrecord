@@ -1,7 +1,9 @@
 #pragma once
 
 #include "AudioEngineInterface.h"
+#include "TakeFile.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace zrecord {
@@ -22,18 +24,40 @@ public:
     int defaultInputDeviceIndex() const override { return devices_.empty() ? -1 : devices_.front().index; }
     void setInputDevices(std::vector<AudioDeviceInfo> devices) { devices_ = std::move(devices); }
 
-    bool startRecording(int deviceIndex, int channels, double, std::string&) override {
+    bool startRecording(int deviceIndex, int channels, double sampleRate, std::string&) override {
+        recordingRate_ = sampleRate;
         recording_ = true;
         muted_ = false;
         lastRecordingDevice_ = deviceIndex;
         lastRecordingChannels_ = channels;
         inputClip_ = {};
         dropouts_.clear();
+        takeStatus_ = TakeFileStatus{};
+        takeStatus_.path = nextTakePath_;
+        nextTakePath_.clear();
         return true;
     }
     int lastRecordingDevice() const { return lastRecordingDevice_; }
     int lastRecordingChannels() const { return lastRecordingChannels_; }
-    void stopRecording() override { recording_ = false; }
+    // Like the real engine, the take ends up in its file: the captured
+    // buffer (set by the test) is written there at Stop -- all of it, or
+    // with a failure injected, only the frames "on disk".
+    void stopRecording() override {
+        if (recording_ && !takeStatus_.path.empty()) {
+            const int channels = std::max(1, lastRecordingChannels_);
+            const int64_t frames = static_cast<int64_t>(captured_.size()) / channels;
+            const int64_t onDisk = takeStatus_.failed ? std::min(takeStatus_.framesOnDisk, frames) : frames;
+            FloatWavAppender file;
+            std::string error;
+            if (file.open(takeStatus_.path, channels, static_cast<int>(recordingRate_), error)) {
+                file.append(captured_.data(), onDisk);
+                file.close();
+            }
+            takeStatus_.framesOnDisk = onDisk;
+            takeStatus_.framesInMemory = frames - onDisk;
+        }
+        recording_ = false;
+    }
     bool isRecording() const override { return recording_; }
 
     void setInputMuted(bool muted) override { muted_ = muted; }
@@ -89,8 +113,17 @@ public:
     // Losses in the take handed over at the next Stop (frames into the take).
     void setTakeDropouts(std::vector<LostInterval> dropouts) { dropouts_ = std::move(dropouts); }
     double capturedSeconds() const override { return 0.0; }
+    void setNextTakePath(const std::string& path) override { nextTakePath_ = path; }
+    const std::string& nextTakePath() const { return nextTakePath_; }
+    TakeFileStatus takeFileStatus() const override { return takeStatus_; }
+    // The take's writer "fails" now (disk full), `framesOnDisk` into it.
+    void failTakeWrite(const std::string& error, int64_t framesOnDisk) {
+        takeStatus_.failed = true;
+        takeStatus_.error = error;
+        takeStatus_.framesOnDisk = framesOnDisk;
+    }
     std::vector<float> copyCapturedBuffer() const override { return captured_; }
-    std::vector<float> consumeNewSamples() override { return {}; }
+    bool consumeLivePeak(float&, float&) override { return false; }
 
     // Lets a test hand a finished "take" to MainWindow when it stops.
     void setCapturedBuffer(std::vector<float> samples) { captured_ = std::move(samples); }
@@ -102,6 +135,9 @@ public:
 
 private:
     InputClipStats inputClip_;
+    TakeFileStatus takeStatus_;
+    double recordingRate_ = 44100.0;
+    std::string nextTakePath_;
     std::vector<LostInterval> dropouts_;
     bool recording_ = false;
     bool playing_ = false;

@@ -36,6 +36,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <algorithm>
+#include <QLocale>
 #include <cmath>
 
 #include "AudioEngine.h"
@@ -44,6 +45,8 @@
 #include "Capture.h"
 #include "Commands.h"
 #include "ProjectFile.h"
+#include "Recovery.h"
+#include "RecoveryDialog.h"
 #include "Resampler.h"
 
 namespace zrecord {
@@ -59,6 +62,19 @@ QString formatDuration(double seconds) {
         .arg(mm, 2, 10, QChar('0'))
         .arg(ss, 2, 10, QChar('0'));
 }
+
+// "12.3 s" / "4:05" for how much of a take went where.
+QString formatTakeLength(int64_t frames, double sampleRate) {
+    const double seconds = static_cast<double>(frames) / std::max(1.0, sampleRate);
+    if (seconds < 60.0) {
+        return QString("%1 s").arg(seconds, 0, 'f', 1);
+    }
+    const int total = static_cast<int>(seconds);
+    return QString("%1:%2").arg(total / 60).arg(total % 60, 2, 10, QChar('0'));
+}
+
+constexpr int kJournalDebounceMs = 300;
+constexpr int kAutosaveIntervalMs = 30000;
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : MainWindow(std::make_unique<AudioEngine>(), parent) {}
@@ -86,6 +102,30 @@ MainWindow::MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* pa
     });
     updateWindowTitle();
 
+    // Crash recovery: this instance's session, and the journal that keeps
+    // it current. (Offering to restore a crashed session is separate, so a
+    // window built by a test never prompts.)
+    recovery_ = std::make_unique<RecoverySession>(RecoverySession::defaultRoot());
+    QString recoveryError;
+    if (!recovery_->begin(&recoveryError)) {
+        statusLabel_->setText("Crash recovery is off: " + recoveryError);
+    }
+    journalTimer_ = new QTimer(this);
+    journalTimer_->setSingleShot(true);
+    journalTimer_->setInterval(kJournalDebounceMs);
+    connect(journalTimer_, &QTimer::timeout, this, &MainWindow::writeJournal);
+    autosaveTimer_ = new QTimer(this);
+    autosaveTimer_->setInterval(kAutosaveIntervalMs);
+    connect(autosaveTimer_, &QTimer::timeout, this, [this] {
+        if (journalDirty_) {
+            writeJournal();
+        }
+        showJournalError();
+    });
+    autosaveTimer_->start();
+    connect(undoStack_, &QUndoStack::indexChanged, this, [this](int) { journalSoon(); });
+    connect(trackPanel_, &TrackPanel::trackSettingsChanged, this, &MainWindow::journalSoon);
+
     restoreGeometry(QSettings().value(kGeometryKey).toByteArray());
 }
 
@@ -95,10 +135,137 @@ MainWindow::~MainWindow() {
     // indexChanged into a lambda that touches trackPanel_ and project_, both
     // already destroyed by then. Tear it down while everything is still alive.
     timer_->stop();
+    journalTimer_->stop();
+    autosaveTimer_->stop();
     undoStack_->disconnect(this);
     delete undoStack_;
     undoStack_ = nullptr;
     engine_->stopPlayback();
+    if (engine_->isRecording()) {
+        engine_->stopRecording();
+    }
+    // Being destroyed is a clean exit (a crash never gets here): nothing to
+    // recover. closeEvent() normally did this already.
+    recovery_->discard();
+}
+
+void MainWindow::journalSoon() {
+    journalDirty_ = true;
+    journalTimer_->start(); // restarts: a burst of edits is one write
+}
+
+void MainWindow::writeJournal() {
+    journalTimer_->stop();
+    journalDirty_ = false;
+    if (!recovery_->active()) {
+        return;
+    }
+    recovery_->scheduleJournal(project_); // written in the background
+}
+
+void MainWindow::showJournalError() {
+    // A failed autosave doesn't stop you working, but you should know that a
+    // crash now would lose more than it should.
+    const QString error = recovery_->lastJournalError();
+    if (error != shownJournalError_ && !engine_->isRecording()) {
+        shownJournalError_ = error;
+        if (!error.isEmpty()) {
+            statusLabel_->setText("Autosave failed: " + error);
+        }
+    }
+}
+
+bool MainWindow::writeJournalNowForTest() {
+    writeJournal();
+    const bool ok = recovery_->flushJournal();
+    showJournalError();
+    return ok;
+}
+
+void MainWindow::abandonRecoveryForTest() {
+    recovery_->flushJournal();
+    recovery_->abandonForTesting();
+}
+
+QString MainWindow::statusTextForTest() const {
+    return statusLabel_->text();
+}
+
+bool MainWindow::offerRecovery() {
+    if (!recovery_->active() || engine_->isRecording() || hasUnsavedChanges()) {
+        return false; // only into a fresh window
+    }
+    std::vector<std::unique_ptr<RecoverableSession>> sessions = RecoverableSession::find(RecoverySession::defaultRoot());
+    while (!sessions.empty()) {
+        std::vector<RecoveryDialog::Entry> entries;
+        for (const auto& session : sessions) {
+            entries.push_back({session->summary(), session->lastSaved()});
+        }
+        RecoveryDialog dialog(entries, this);
+        const int result = recoveryDriver_ ? recoveryDriver_(dialog) : dialog.exec();
+        const int index = std::clamp(dialog.selectedIndex(), 0, static_cast<int>(sessions.size()) - 1);
+        RecoverableSession& session = *sessions[static_cast<size_t>(index)];
+        const QString when = QLocale().toString(session.lastSaved(), QLocale::ShortFormat);
+        if (result == RecoveryDialog::Discard) {
+            session.discard();
+            sessions.erase(sessions.begin() + index);
+            statusLabel_->setText("Discarded the unsaved work from " + when);
+            continue; // any others are offered in turn
+        }
+        if (result != RecoveryDialog::Restore) {
+            return false; // Decide Later: all of them stay for next time
+        }
+
+        Project restored;
+        std::string error;
+        int64_t takeFrames = 0;
+        if (!session.restore(restored, error, &takeFrames)) {
+            QMessageBox::warning(this, "Recovery failed",
+                                 "The unsaved work couldn't be restored: " + QString::fromStdString(error) +
+                                     "\n\nIt has been kept, and will be offered again next time.");
+            return false;
+        }
+        stopPlaybackNow();
+        ProjectFile::replace(project_, restored);
+        undoStack_->clear();
+        trackPanel_->refresh();
+        trackPanel_->zoomToFit();
+        setControlsEnabled(false);
+        // Restored work is unsaved work: Save goes back to its project
+        // folder (if it had one that still exists), and quitting asks.
+        const QString path = session.projectPath();
+        projectPath_ = (!path.isEmpty() && QDir(path).exists()) ? path : QString();
+        settingsDirty_ = true;
+        updateWindowTitle();
+        // It's this session's to protect now: journal it here (a copy of its
+        // audio) before the old session and its files are removed.
+        resetRecovery(projectPath_, {});
+        writeJournal();
+        QString note = "Restored the unsaved work from " + when;
+        if (takeFrames > 0) {
+            note += QString(", including a partial take of %1 (labelled \"Recovered take\")")
+                        .arg(formatTakeLength(takeFrames, project_.sampleRate));
+        }
+        if (recovery_->flushJournal()) {
+            session.discard();
+            statusLabel_->setText(note + ". Save the project to keep it.");
+        } else {
+            // Keep the old session rather than leave the work unprotected.
+            statusLabel_->setText(note + ". Autosave failed (" + recovery_->lastJournalError() +
+                                  "), so the recovery data was kept. Save the project to keep it.");
+        }
+        return true;
+    }
+    return false;
+}
+
+void MainWindow::resetRecovery(const QString& projectPath, const ClipFileMap& files) {
+    journalTimer_->stop();
+    journalDirty_ = false;
+    shownJournalError_.clear();
+    recovery_->clear();
+    recovery_->setProjectPath(projectPath);
+    recovery_->setAudioFiles(files);
 }
 
 void MainWindow::buildUi() {
@@ -780,6 +947,24 @@ void MainWindow::onToggleRecord() {
             stopPlaybackNow();
         }
 
+        // The take streams to a file as it's recorded: into the project's
+        // takes/ folder, or this session's if the project isn't saved yet.
+        // The journal is brought up to date first, and recording.json says
+        // where the take goes, so a crash mid-take can bring it back.
+        takePath_.clear();
+        if (recovery_->active()) {
+            takePath_ = recovery_->newTakePath();
+            writeJournal();
+            recovery_->flushJournal();
+            TakeInProgress take;
+            take.path = takePath_;
+            take.trackIndex = armedIndex;
+            take.startFrame = project_.tracks[static_cast<size_t>(armedIndex)].endFrame();
+            take.channels = recordingChannels_;
+            recovery_->beginTake(take);
+        }
+        engine_->setNextTakePath(takePath_.toStdString()); // empty: the engine's own temporary file
+
         std::string error;
         if (engine_->startRecording(deviceIndex, recordingChannels_, project_.sampleRate, error)) {
             recordButton_->setText("■  STOP");
@@ -802,16 +987,23 @@ void MainWindow::onToggleRecord() {
             showInputClipCount({});
             recordingBar_->show();
         } else {
+            if (!takePath_.isEmpty()) {
+                recovery_->endTake();
+                QFile::remove(takePath_);
+                takePath_.clear();
+            }
             QMessageBox::warning(this, "Recording failed", QString::fromStdString(error));
         }
     } else {
         engine_->stopRecording();
         updateInputClip(); // clips in the last few milliseconds count too
+        const TakeFileStatus takeStatus = engine_->takeFileStatus();
         std::vector<float> captured = engine_->copyCapturedBuffer();
+        const bool upmixed = recordingChannels_ == 1 && project_.channels == 2;
         trackPanel_->endLiveCapture();
         recordingBar_->hide();
 
-        if (recordingChannels_ == 1 && project_.channels == 2) {
+        if (upmixed) {
             std::vector<float> stereo(captured.size() * 2);
             for (size_t i = 0; i < captured.size(); ++i) {
                 stereo[2 * i] = stereo[2 * i + 1] = captured[i];
@@ -841,6 +1033,22 @@ void MainWindow::onToggleRecord() {
                 undoStack_->push(new AddLabelCommand(project_, label));
             }
             undoStack_->endMacro();
+            // The take is in the project now. The journal can refer to its
+            // file rather than copy it -- if the file holds exactly the clip.
+            if (!takePath_.isEmpty()) {
+                recovery_->markTakeCommitted(takePath_);
+                const Track& track = project_.tracks[static_cast<size_t>(recordingArmedTrackIndex_)];
+                if (!upmixed && !takeStatus.failed && !track.clips.empty()) {
+                    recovery_->setAudioFile(track.clips.back().samples.contentId(), takePath_);
+                }
+            }
+        }
+        if (!takePath_.isEmpty()) {
+            writeJournal();
+            if (recovery_->flushJournal()) {
+                recovery_->endTake(); // the journal has it: recording.json can go
+            }
+            takePath_.clear();
         }
         recordingArmedTrackIndex_ = -1;
         trackPanel_->refresh();
@@ -855,6 +1063,32 @@ void MainWindow::onToggleRecord() {
         const std::string lost = dropoutSummary(dropouts, project_.sampleRate);
         if (!lost.empty()) {
             problems << QString::fromStdString(lost) + ", filled with silence and labelled";
+        }
+        if (takeStatus.failed) {
+            // The disk filled up (or the write failed): the take stopped
+            // there. Nothing captured was thrown away without saying so.
+            const double rate = project_.sampleRate;
+            QString kept = QString("%1 of the take was saved to its file").arg(formatTakeLength(takeStatus.framesOnDisk, rate));
+            if (takeStatus.framesInMemory > 0) {
+                kept += QString(", and the %1 after that was kept in memory")
+                            .arg(formatTakeLength(takeStatus.framesInMemory, rate));
+            }
+            kept += "; all of it is in the project.";
+            if (takeStatus.framesDropped > 0) {
+                kept += QString(" %1 recorded after that could not be kept.")
+                            .arg(formatTakeLength(takeStatus.framesDropped, rate));
+            }
+            const QString error = QString::fromStdString(takeStatus.error);
+            problems.prepend("the take couldn't be written to disk (" + error + ")");
+            auto* box = new QMessageBox(QMessageBox::Warning, "Recording stopped",
+                                        "Recording stopped: the take could not be written to disk.", QMessageBox::Ok,
+                                        this);
+            box->setObjectName("recordingStoppedMessage");
+            box->setInformativeText(kept + "\n\nFree some space, or save the project somewhere else, before recording "
+                                           "again.");
+            box->setDetailedText(QString::fromStdString(takeStatus.path) + ": " + error);
+            box->setAttribute(Qt::WA_DeleteOnClose);
+            box->open();
         }
         statusLabel_->setText(problems.isEmpty() ? QString("Stopped")
                                                  : QString("Stopped \u2014 ") + problems.join("; "));
@@ -957,6 +1191,7 @@ void MainWindow::onNewProject() {
     trackPanel_->refresh();
     setControlsEnabled(false);
     markSaved(QString()); // an empty project has nothing to lose
+    resetRecovery(QString(), {});
 }
 
 bool MainWindow::hasUnsavedChanges() const {
@@ -1008,6 +1243,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
     stopPlaybackNow();
     QSettings().setValue(kGeometryKey, saveGeometry());
+    recovery_->discard(); // a clean exit: nothing to recover
     event->accept();
 }
 
@@ -1103,7 +1339,8 @@ bool MainWindow::openProjectFolder(const QString& path, QString* error) {
     // The audio thread reads project_ while playing; don't swap it underneath.
     stopPlaybackNow();
     std::string message;
-    if (!ProjectFile::load(project_, path.toStdString(), message)) {
+    ClipFileMap files;
+    if (!ProjectFile::load(project_, path.toStdString(), message, &files)) {
         // load() is all-or-nothing, so the project -- and the undo commands
         // that refer into it -- are still intact.
         if (error != nullptr) {
@@ -1116,6 +1353,7 @@ bool MainWindow::openProjectFolder(const QString& path, QString* error) {
     trackPanel_->zoomToFit();
     setControlsEnabled(false);
     markSaved(path);
+    resetRecovery(path, files);
     return true;
 }
 
@@ -1160,13 +1398,17 @@ bool MainWindow::saveProjectAs() {
 
 bool MainWindow::saveProjectTo(const QString& path, QString* error) {
     std::string message;
-    if (!ProjectFile::save(project_, path.toStdString(), message)) {
+    ClipFileMap files;
+    if (!ProjectFile::save(project_, path.toStdString(), message, &files)) {
         if (error != nullptr) {
             *error = QString::fromStdString(message);
         }
         return false;
     }
     markSaved(path);
+    // Saved: the recovery data (and the take files, which the project now
+    // has its own copies of) can go.
+    resetRecovery(path, files);
     return true;
 }
 
@@ -1776,6 +2018,9 @@ void MainWindow::onTick() {
     engine_->drainMeterBlocks(meterBlocks_);
     levelMeter_->addBlocks(meterBlocks_);
 
+    if (engine_->isRecording() && engine_->takeFileStatus().failed) {
+        onToggleRecord(); // stop there, keeping everything captured so far
+    }
     if (engine_->isRecording()) {
         updateInputClip();
         double captured = engine_->capturedSeconds();
@@ -1795,14 +2040,8 @@ void MainWindow::onTick() {
             QString("font-weight: bold; color: %1;")
                 .arg(muted ? "#ffa000" : (blinkOn ? "#ff1744" : "#7a1226")));
 
-        std::vector<float> newSamples = engine_->consumeNewSamples();
-        if (!newSamples.empty()) {
-            float minVal = newSamples.front();
-            float maxVal = newSamples.front();
-            for (float sample : newSamples) {
-                minVal = std::min(minVal, sample);
-                maxVal = std::max(maxVal, sample);
-            }
+        float minVal = 0.0f, maxVal = 0.0f;
+        if (engine_->consumeLivePeak(minVal, maxVal)) {
             trackPanel_->pushLiveColumn(minVal, maxVal);
         }
     }

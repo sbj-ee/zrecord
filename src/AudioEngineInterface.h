@@ -17,6 +17,16 @@ struct InputClipStats {
     int64_t samples = 0; // samples in those runs, all channels
 };
 
+// Where the current (or last) take is being streamed, and how that's going.
+struct TakeFileStatus {
+    std::string path;           // the take's WAV file
+    bool failed = false;        // a write failed: the take should be stopped
+    std::string error;          // why (e.g. "... No space left on device")
+    int64_t framesOnDisk = 0;   // the file holds this many frames, intact
+    int64_t framesInMemory = 0; // captured after the failure, kept in memory
+    int64_t framesDropped = 0;  // beyond even that (reported, never silent)
+};
+
 struct AudioDeviceInfo {
     int index = -1;
     std::string name;
@@ -80,8 +90,19 @@ public:
     // Complete only after stopRecording().
     virtual std::vector<LostInterval> takeDropouts() const = 0;
     virtual double capturedSeconds() const = 0;
+
+    // Takes are streamed to disk while they're recorded, by a writer thread
+    // (never the audio callback), so memory stays bounded however long the
+    // take. The next startRecording() streams into `path` (a .wav); empty
+    // means a temporary file the engine removes itself.
+    virtual void setNextTakePath(const std::string& path) = 0;
+    virtual TakeFileStatus takeFileStatus() const = 0;
+    // The finished take, after stopRecording(): what the file holds, then
+    // anything a write failure left in memory.
     virtual std::vector<float> copyCapturedBuffer() const = 0;
-    virtual std::vector<float> consumeNewSamples() = 0;
+    // The quietest and loudest sample captured since the previous call, for
+    // the live waveform; false if nothing new arrived.
+    virtual bool consumeLivePeak(float& minValue, float& maxValue) = 0;
 };
 
 } // namespace zrecord
