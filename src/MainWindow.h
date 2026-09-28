@@ -59,6 +59,7 @@ private slots:
     void onFadeOut();
     void onNormalize();
     void onVoiceChanger();
+    void onEditTrackEffects(int trackIndex);
     void onAbout();
     void onCrossfade();
     void onApplyEffect();
@@ -116,6 +117,10 @@ public:
     // preview is stopped when the dialog closes, as with exec().
     using VoiceChangerDialogDriver = std::function<bool(class VoiceChangerDialog&)>;
     void setVoiceChangerDialogDriverForTest(VoiceChangerDialogDriver driver) { voiceDriver_ = std::move(driver); }
+    // Same for a track's effects dialog; the driver returns the dialog's
+    // result code (QDialog::Accepted/Rejected or kBakeResult).
+    using TrackEffectsDialogDriver = std::function<int(class TrackEffectsDialog&)>;
+    void setTrackEffectsDialogDriverForTest(TrackEffectsDialogDriver driver) { effectsDriver_ = std::move(driver); }
     // The temporary project a running preview plays (null when none), and a
     // way to run the timer tick without waiting for it.
     const Project* previewProjectForTest() const { return previewActive_ ? previewProject_.get() : nullptr; }
@@ -188,6 +193,10 @@ private:
     UnsavedChangesPrompt unsavedPrompt_;
     NormalizeDialogDriver normalizeDriver_;
     VoiceChangerDialogDriver voiceDriver_;
+    TrackEffectsDialogDriver effectsDriver_;
+    // Sets a track's stack directly (no undo step) and lets running playback
+    // hear it: the effects dialog's live edits.
+    void setTrackEffectsLive(int trackIndex, const std::vector<Effect>& effects);
     // The engine reads the project it plays from the audio thread, so the
     // preview's project lives here until the preview is stopped.
     std::unique_ptr<Project> previewProject_;

@@ -94,6 +94,7 @@ add_library(zrecord_gui STATIC
     src/NormalizeDialog.cpp
     src/VoiceChangerDialog.cpp
     src/PeakMeter.cpp
+    src/TrackEffectsDialog.cpp
 )
 
 target_link_libraries(zrecord_gui PUBLIC zrecord_core)

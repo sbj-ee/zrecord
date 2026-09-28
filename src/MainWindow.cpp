@@ -2,6 +2,7 @@
 
 #include "NormalizeDialog.h"
 #include "PeakMeter.h"
+#include "TrackEffectsDialog.h"
 #include "VoiceChangerDialog.h"
 #include "zrecord_version.h"
 
@@ -81,6 +82,7 @@ MainWindow::MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* pa
     timer_->start(50);
 
     connect(undoStack_, &QUndoStack::cleanChanged, this, [this](bool) { updateWindowTitle(); });
+    connect(trackPanel_, &TrackPanel::effectsRequested, this, &MainWindow::onEditTrackEffects);
     connect(trackPanel_, &TrackPanel::trackSettingsChanged, this, [this] {
         settingsDirty_ = true;
         updateWindowTitle();
@@ -1700,6 +1702,57 @@ void MainWindow::onApplyEffect() {
     undoStack_->push(new ApplyEffectCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame,
                                              filterSettingsFromUi(), project_.sampleRate, project_.channels));
     trackPanel_->refresh();
+}
+
+void MainWindow::setTrackEffectsLive(int trackIndex, const std::vector<Effect>& effects) {
+    {
+        std::lock_guard<std::mutex> lock(project_.mutex);
+        project_.tracks[static_cast<size_t>(trackIndex)].effects = effects;
+    }
+    if (playbackActive_ && engine_->isPlaying()) {
+        engine_->refreshPlayback(); // heard from the next callback on, no restart
+    }
+}
+
+void MainWindow::onEditTrackEffects(int trackIndex) {
+    if (trackIndex < 0 || trackIndex >= static_cast<int>(project_.tracks.size())) {
+        return;
+    }
+    const std::vector<Effect> before = project_.tracks[static_cast<size_t>(trackIndex)].effects;
+    TrackEffectsDialog dialog(QString::fromStdString(project_.tracks[static_cast<size_t>(trackIndex)].name), before,
+                              this);
+    // Every edit is heard at once if the project is playing; the undo step
+    // comes when the dialog closes.
+    connect(&dialog, &TrackEffectsDialog::effectsChanged, this,
+            [this, trackIndex, &dialog] { setTrackEffectsLive(trackIndex, dialog.effects()); });
+    const int result = effectsDriver_ ? effectsDriver_(dialog) : dialog.exec();
+    const std::vector<Effect> after = dialog.effects();
+    setTrackEffectsLive(trackIndex, before); // the commands below make the change, undoably
+    if (result == QDialog::Rejected) {
+        trackPanel_->refresh();
+        return;
+    }
+    const bool bake = result == TrackEffectsDialog::kBakeResult && anyEffectActive(after);
+    if (bake && after != before) {
+        undoStack_->beginMacro("Apply Track Effects");
+    }
+    if (after != before) {
+        undoStack_->push(new SetTrackEffectsCommand(project_, trackIndex, before, after));
+    }
+    if (bake) {
+        if (playbackActive_ || engine_->isPlaying()) {
+            stopPlaybackNow(); // the clips are about to be rewritten
+        }
+        undoStack_->push(new BakeTrackEffectsCommand(project_, trackIndex));
+        if (after != before) {
+            undoStack_->endMacro();
+        }
+        statusLabel_->setText("Applied the track's effects to its audio");
+    }
+    trackPanel_->refresh();
+    if (playbackActive_ && engine_->isPlaying()) {
+        engine_->refreshPlayback();
+    }
 }
 
 void MainWindow::onClipsMoveRequested(const std::vector<ClipMove>& moves) {
