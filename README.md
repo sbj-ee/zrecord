@@ -18,6 +18,8 @@ A Qt6 multi-track audio recorder and editor for Linux, with per-track effect sta
 - dB level meter per channel: RMS bar, peak bar, peak hold with readout and a latching clip light, plus an optional input (pre-gain) tick; range and decay are set from its right-click menu. It shows what is being recorded (after input gain), or the playback mix after track effects
 - Clipped audio (runs of full-scale samples) is painted red in the waveform
 - Dropout detection: input lost while recording (a driver overflow, or zrecord falling behind) is filled with silence of the same length, so the rest of the take stays in sync, and marked with a "Dropout 12 ms" label; the status bar gives the count and total lost after Stop
+- Takes stream to disk while recording (a 32-bit float WAV per take, kept readable if zrecord is killed), so long takes don't fill memory; a full disk stops the take and keeps what was captured, with a message saying so
+- Autosave and crash recovery: an autosave journal after every edit, and after a crash a Recover Unsaved Work dialog restores the project and any take that was being recorded, or discards it
 - Export a mixdown to WAV, FLAC, OGG Vorbis, or MP3 (all via libsndfile)
 
 ## Keyboard shortcuts
@@ -133,6 +135,10 @@ The .deb links dynamically against the system's libraries, each under its own li
 ## Notes
 
 - Effects are heard on playback, not while recording: zrecord doesn't monitor the input through the speakers, and a take is recorded raw so its effects can still be changed afterwards. The FX button is lit on any track whose playback differs from its waveform.
+
+- Recording streams each take to a file: into the project's `takes/` folder once the project is saved, otherwise into the recovery folder (`~/.local/share/zrecord/recovery`). Saving copies takes into the project's clip files and removes the take files. After Stop the take is also loaded into memory, like the rest of the project.
+- Crash recovery keeps one session folder per running zrecord under `~/.local/share/zrecord/recovery`, holding the autosave journal. A clean exit, or saving, removes it. After a crash, the next launch offers to restore or discard it. The undo history isn't restored.
+- A take file past 4 GiB (about 3 hours of 48 kHz stereo) keeps growing, but its WAV header sizes stay at the 4 GiB maximum. zrecord reads the whole file; other tools may stop at 4 GiB unless they go by the file's size.
 
 - If a take shows "Dropout" labels, input was lost there and replaced with silence (so the rest stays in time). Frequent dropouts usually mean the system is overloaded or the audio device's buffer is too small for it.
 - If recording or playback seems stalled or silent, check your system's mic input volume/mute state (e.g. via `wpctl status` or your desktop's sound settings) before assuming it's an app bug.

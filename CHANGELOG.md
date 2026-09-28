@@ -32,6 +32,18 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The level meter still shows the recorded level (after Input gain) while
   recording. During playback it shows the mix after every track's effects.
 
+- **Takes are streamed to disk while recording.** A writer thread (never
+  the audio callback) moves the input from the capture buffer into a 32-bit
+  float WAV as it arrives, so memory use no longer grows with the length of
+  a take: a 10-minute take now adds about 3 MB instead of the whole take.
+  A saved project's takes go into a `takes/` folder inside its `.zrproj`
+  folder; an unsaved project's go into its recovery folder. The WAV header
+  is brought up to date every half second and the data is flushed to disk
+  every two seconds, so a take cut off by a crash or a kill is still a
+  readable WAV. At Stop the take is loaded into the project as before (the
+  project is edited in memory), and saving copies it into the project's
+  clip files as usual, after which the take file is removed.
+
 ### Fixed
 
 - **The level meter now shows what is recorded.** While recording it
@@ -99,8 +111,7 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   channel (L and R). Each row has a solid bar for the RMS (average) level,
   a lighter bar out to the peak, and a peak-hold tick that stays for 1.5 s
   and then falls. The number beside the meter is the highest held peak. It
-  still shows what is recorded (after input gain and live filters), or the
-  playback mix.
+  still shows what is recorded (after input gain), or the playback mix.
 - **Input level tick (optional).** While recording, a small cyan tick in
   each row shows the input level before input gain, so you can see how
   much the gain adds.
@@ -127,6 +138,33 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without allocating, locking or logging. The driver's timestamps are used
   only to measure a loss the driver reports. On their own they jitter too
   much on common Linux audio setups to prove one.
+
+- **Autosave and crash recovery.** While zrecord runs it keeps an autosave
+  journal of the project: tracks, clips (referring to audio files), labels,
+  envelopes and effect stacks. The journal is written in the background a
+  moment after every undoable edit or track-setting change, and every 30 s
+  as a safety net. Every file is written to a temporary name and renamed
+  into place, so a crash in the middle of a write leaves the previous
+  journal intact. Audio already in a file (a streamed take, a saved
+  project's clips) is referred to rather than copied, and only audio that
+  changed is written. If autosave fails, the status bar says so.
+- **Recover Unsaved Work.** When zrecord starts after a crash, a kill or a
+  power cut, it offers to restore the unsaved work that run left behind:
+  the last journal plus any take that was being recorded, placed where it
+  was being recorded and labelled "Recovered take". **Restore** opens it as
+  an unsaved project (Save goes back to its project folder if it had one),
+  **Discard** deletes it, and **Decide Later** keeps it for next time. The
+  undo history isn't restored, and dropout labels for a take cut off by a
+  crash are lost (the audio, with its silence padding, is kept). Saving,
+  opening or starting a project removes the recovery data, and so does
+  quitting normally. Each running zrecord holds its own session, under
+  `~/.local/share/zrecord/recovery`, with a lock file, so a second instance
+  never offers a session that is still in use.
+- **A full disk stops the take without losing it.** If the take can't be
+  written (the disk is full, or a write fails), recording stops there. The
+  part written stays on disk and the part still in memory (up to 60 s)
+  goes into the take too. A message says how much went where and why, so
+  already-captured audio is never lost silently.
 
 ## [1.1.1] - 2026-09-25
 
