@@ -56,6 +56,7 @@ private slots:
     void int16ExtremesAreTheFullScale();
     void clipCountsAreExact();
     void captureBlockChecksTheRawInputForClips();
+    void peakCacheFlagsClippedBlocks();
     void realEngineCapturesAtUnityGain_data();
     void realEngineCapturesAtUnityGain();
     void realEngineAppliesInputGain();
@@ -332,6 +333,50 @@ void TestCapture::captureBlockChecksTheRawInputForClips() {
     d.reset(2);
     block = sine(dbfs(-6.0), 4410, 2);
     QCOMPARE(processCaptureBlock(block, 4410, 2, 1.0f, chain, &d).inputClipEvents, int64_t(0));
+}
+
+void TestCapture::peakCacheFlagsClippedBlocks() {
+    // The waveform summary carries a clip flag per 256-frame block, using the
+    // same run rule: runs crossing a block boundary flag both blocks, a lone
+    // full-scale peak flags nothing.
+    constexpr int64_t B = PeakCache::kBlockFrames;
+    std::vector<float> mono(size_t(5 * B), 0.25f);
+    for (int64_t f = B - 2; f <= B; ++f) mono[size_t(f)] = 1.0f; // blocks 0 and 1
+    mono[size_t(2 * B + 10)] = -1.0f;                             // lone peak, block 2
+    mono[size_t(2 * B + 11)] = -1.0f;                             // ...and a second: still 2 < 3
+    for (int64_t f = 4 * B + 5; f < 4 * B + 50; ++f) mono[size_t(f)] = -1.0f; // block 4
+    PeakCache cache;
+    cache.build(SampleBuffer(mono), 1);
+    QCOMPARE(cache.blockCount(), int64_t(5));
+    QVERIFY(cache.blockAt(0).clipped);
+    QVERIFY(cache.blockAt(1).clipped);
+    QVERIFY(!cache.blockAt(2).clipped);
+    QCOMPARE(cache.blockAt(2).minValue, -1.0f); // the peak is still drawn
+    QVERIFY(!cache.blockAt(3).clipped);
+    QVERIFY(cache.blockAt(4).clipped);
+
+    // A run that spans a whole block and more flags every block it touches.
+    std::vector<float> longRun(size_t(4 * B), 0.0f);
+    for (int64_t f = B / 2; f < 3 * B + 1; ++f) longRun[size_t(f)] = 1.0f;
+    cache.build(SampleBuffer(longRun), 1);
+    QVERIFY(cache.blockAt(0).clipped && cache.blockAt(1).clipped && cache.blockAt(2).clipped &&
+            cache.blockAt(3).clipped);
+
+    // Stereo: full scale alternating between channels is not a run.
+    std::vector<float> hop(size_t(2 * B * 2), 0.0f);
+    for (int64_t f = 0; f < 2 * B; ++f) hop[size_t(2 * f + (f % 2))] = 1.0f;
+    cache.build(SampleBuffer(hop), 2);
+    QVERIFY(!cache.blockAt(0).clipped && !cache.blockAt(1).clipped);
+
+    // The per-sample test the zoomed-in view uses agrees.
+    const SampleBuffer buf(mono);
+    QVERIFY(isInClipRun(buf, 1, B - 2, 0));
+    QVERIFY(isInClipRun(buf, 1, B, 0));
+    QVERIFY(!isInClipRun(buf, 1, B + 1, 0));
+    QVERIFY(!isInClipRun(buf, 1, 2 * B + 10, 0));
+    QVERIFY(!isInClipRun(buf, 1, 2 * B + 11, 0));
+    QVERIFY(isInClipRun(buf, 1, 4 * B + 49, 0));
+    QVERIFY(!isInClipRun(SampleBuffer(hop), 2, 3, 1));
 }
 
 bool TestCapture::captureFromFile(const std::vector<int16_t>& samples, std::vector<float>& take, float& meterPeak,

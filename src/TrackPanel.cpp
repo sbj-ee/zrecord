@@ -1,5 +1,7 @@
 #include "TrackPanel.h"
 
+#include "Capture.h"
+
 #include "Fft.h"
 #include "Snap.h"
 
@@ -382,12 +384,17 @@ int TrackPanel::laneIndexAtY(int y) const {
 }
 
 namespace {
+// Waveform colour for columns that contain clipped samples.
+const QColor kClippedWaveColor(255, 64, 64);
+} // namespace
+
+namespace {
 // Folds one clip's peaks over [frameStart, frameEnd) into min/max, treating
 // the clip as if it began at clip.startFrame + shiftFrames. The shift is what
 // lets a clip being dragged be drawn at its preview position without touching
 // the model.
 void accumulateClip(const Clip& clip, int64_t frameStart, int64_t frameEnd, int64_t shiftFrames,
-                     float& minValue, float& maxValue, bool& first) {
+                     float& minValue, float& maxValue, bool& first, bool& clipped) {
     int64_t clipStart = clip.startFrame + shiftFrames;
     int64_t overlapStart = std::max(clipStart, frameStart);
     int64_t overlapEnd = std::min(clipStart + clip.frameCount(), frameEnd);
@@ -414,6 +421,7 @@ void accumulateClip(const Clip& clip, int64_t frameStart, int64_t frameEnd, int6
             auto mm = clip.peaks.blockAt(b);
             accumulate(mm.minValue);
             accumulate(mm.maxValue);
+            clipped = clipped || mm.clipped;
         }
     } else {
         for (int64_t f = localStart; f < localEnd; ++f) {
@@ -421,6 +429,9 @@ void accumulateClip(const Clip& clip, int64_t frameStart, int64_t frameEnd, int6
                 size_t idx = static_cast<size_t>(f) * static_cast<size_t>(clip.channels) + static_cast<size_t>(c);
                 if (idx < clip.samples.size()) {
                     accumulate(clip.samples[idx]);
+                    if (!clipped && isFullScale(clip.samples[idx]) && isInClipRun(clip.samples, clip.channels, f, c)) {
+                        clipped = true;
+                    }
                 }
             }
         }
@@ -433,11 +444,12 @@ PeakCache::MinMax TrackPanel::computeColumn(const Track& track, int64_t frameSta
     float minValue = 0.0f;
     float maxValue = 0.0f;
     bool first = true;
+    bool clipped = false;
     for (const auto& clip : track.clips) {
         if (std::find(skipClips.begin(), skipClips.end(), &clip) != skipClips.end()) continue;
-        accumulateClip(clip, frameStart, frameEnd, 0, minValue, maxValue, first);
+        accumulateClip(clip, frameStart, frameEnd, 0, minValue, maxValue, first, clipped);
     }
-    return {minValue, maxValue};
+    return {minValue, maxValue, clipped};
 }
 
 PeakCache::MinMax TrackPanel::computeClipColumn(const Clip& clip, int64_t frameStart, int64_t frameEnd,
@@ -445,8 +457,9 @@ PeakCache::MinMax TrackPanel::computeClipColumn(const Clip& clip, int64_t frameS
     float minValue = 0.0f;
     float maxValue = 0.0f;
     bool first = true;
-    accumulateClip(clip, frameStart, frameEnd, shiftFrames, minValue, maxValue, first);
-    return {minValue, maxValue};
+    bool clipped = false;
+    accumulateClip(clip, frameStart, frameEnd, shiftFrames, minValue, maxValue, first, clipped);
+    return {minValue, maxValue, clipped};
 }
 
 void TrackPanel::drawClipDragPreview(QPainter& painter, int w) {
@@ -711,7 +724,6 @@ void TrackPanel::drawLaneWaveform(QPainter& painter, const Track& track, int lan
         }
     }
 
-    painter.setPen(waveColor);
     for (int x = kHeaderWidth; x < w; ++x) {
         int64_t frameStart = frameAtX(x);
         int64_t frameEnd = frameAtX(x + 1);
@@ -719,6 +731,8 @@ void TrackPanel::drawLaneWaveform(QPainter& painter, const Track& track, int lan
         auto mm = computeColumn(track, frameStart, frameEnd, lifted);
         int yTop = midY - static_cast<int>(std::clamp(mm.maxValue, -1.0f, 1.0f) * usableHalfHeight);
         int yBottom = midY - static_cast<int>(std::clamp(mm.minValue, -1.0f, 1.0f) * usableHalfHeight);
+        // Columns holding clipped audio (runs of full-scale samples) are red.
+        painter.setPen(mm.clipped ? kClippedWaveColor : waveColor);
         painter.drawLine(x, yTop, x, yBottom);
     }
 }

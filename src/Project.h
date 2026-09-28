@@ -25,6 +25,11 @@ public:
     struct MinMax {
         float minValue = 0.0f;
         float maxValue = 0.0f;
+        // Some sample in the block belongs to a clip: a run of at least
+        // kClipRunLength consecutive full-scale samples in one channel (see
+        // Capture.h). Runs that cross block boundaries flag every block they
+        // touch; a lone full-scale peak flags nothing.
+        bool clipped = false;
     };
 
     // Peak of frame block `blockIndex` (covering
@@ -40,6 +45,12 @@ private:
     std::shared_ptr<const std::vector<MinMax>> blocks_;
     bool built_ = false;
 };
+
+// True if frame `frame`, channel `channel` of `samples` (interleaved,
+// `channels` wide) is part of a run of at least kClipRunLength consecutive
+// full-scale samples in that channel. Looks at no more than kClipRunLength-1
+// neighbours each side, so it's cheap enough per drawn sample.
+bool isInClipRun(const SampleBuffer& samples, int channels, int64_t frame, int channel);
 
 // One contiguous span of recorded/imported audio, placed on a track's
 // timeline at startFrame. The samples are shared, immutable chunks (see

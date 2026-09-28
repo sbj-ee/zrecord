@@ -81,6 +81,7 @@ private slots:
     void inputGainDefaultsToZeroAndIsRemembered();
     void inputClipIndicatorLatchesPerTake();
     void inputClipCountIsShownAndReportedAtStop();
+    void clippedSamplesArePaintedRed();
     void clipSelectionIsDroppedWhenTracksChange();
     void rulerClickSeeksWhileStopped();
     void seekingAndAutoScrollDuringPlayback();
@@ -892,6 +893,60 @@ void TestGui::inputClipCountIsShownAndReportedAtStop() {
     fake->setCapturedBuffer(std::vector<float>(100, 0.1f));
     findButton(window, "■  STOP")->click();
     QCOMPARE(status->text(), QString("Stopped"));
+}
+
+namespace {
+// Columns (x) of lane 0 that contain a clearly red pixel.
+std::vector<int> redColumns(const QImage& image, int laneTop) {
+    std::vector<int> xs;
+    for (int x = TrackPanel::kHeaderWidth; x < image.width(); ++x) {
+        for (int y = laneTop; y < laneTop + TrackPanel::kLaneHeight; ++y) {
+            const QColor c = image.pixelColor(x, y);
+            if (c.red() > 200 && c.green() < 110 && c.blue() < 110) {
+                xs.push_back(x);
+                break;
+            }
+        }
+    }
+    return xs;
+}
+} // namespace
+
+void TestGui::clippedSamplesArePaintedRed() {
+    // Track 1: quiet audio with a clipped stretch (frames 20000-20999 at full
+    // scale) and a lone full-scale peak at frame 10000, which is not a clip.
+    // Red that's there without the clip (the playhead) is subtracted.
+    panel_.resize(900, 400);
+    Clip& clip = project_.tracks[0].clips[0];
+    const Clip clean = clip;
+    for (double fpp : {100.0, 400.0}) { // per-sample columns, then summary blocks
+        panel_.setFramesPerPixelForTest(fpp);
+        clip = clean;
+        clip.samples.fill(10000, 1, -1.0f);
+        clip.peaks.build(clip.samples, 1);
+        panel_.refresh();
+        const std::vector<int> baseline = redColumns(panel_.grab().toImage(), TrackPanel::lanesTop());
+        clip.samples.fill(20000, 1000, 1.0f);
+        clip.peaks.build(clip.samples, 1);
+        panel_.refresh();
+        std::vector<int> red;
+        for (int x : redColumns(panel_.grab().toImage(), TrackPanel::lanesTop())) {
+            if (std::find(baseline.begin(), baseline.end(), x) == baseline.end()) red.push_back(x);
+        }
+        QVERIFY2(!red.empty(), qPrintable(QString("no red at %1 frames/px").arg(fpp)));
+        const int firstX = TrackPanel::kHeaderWidth + int(20000 / fpp);
+        const int lastX = TrackPanel::kHeaderWidth + int(21000 / fpp);
+        // Summary blocks are 256 frames, so allow one block of slack there.
+        const int slack = fpp >= 256.0 ? int(std::ceil(256.0 / fpp)) + 1 : 1;
+        QVERIFY2(red.front() >= firstX - slack && red.back() <= lastX + slack,
+                 qPrintable(QString("red spans x %1-%2, clip is %3-%4 at %5 frames/px")
+                                .arg(red.front()).arg(red.back()).arg(firstX).arg(lastX).arg(fpp)));
+        QVERIFY(int(red.size()) >= (lastX - firstX) - 1); // the whole stretch
+        // The lone peak is not red, with or without the clip elsewhere.
+        const int peakX = TrackPanel::kHeaderWidth + int(10000 / fpp);
+        QVERIFY(std::find(red.begin(), red.end(), peakX) == red.end());
+        QVERIFY(std::find(baseline.begin(), baseline.end(), peakX) == baseline.end());
+    }
 }
 
 void TestGui::clipSelectionIsDroppedWhenTracksChange() {
