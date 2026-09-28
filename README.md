@@ -15,7 +15,7 @@ A Qt6 multi-track audio recorder and editor for Linux, with a live input filter 
 - Selectable voice effects: Robot Voice, Echo, Deep Voice, Chipmunk, Distortion
 - Voice Changer (Edit menu): pitch shift in semitones that keeps the length, with an independent formant control, Deeper/Higher/Robot/Chipmunk/Custom presets, and a Preview before Apply (one undo step)
 - Playback of the mixed project with a moving playhead; click the ruler to seek, stopped or playing
-- dB peak meter with peak hold and a latching clip light: what is being recorded (after input gain and live filters), or the playback mix
+- dB level meter per channel: RMS bar, peak bar, peak hold with readout and a latching clip light, plus an optional input (pre-gain) tick; range and decay are set from its right-click menu. It shows what is being recorded (after input gain and live filters), or the playback mix
 - Clipped audio (runs of full-scale samples) is painted red in the waveform
 - Export a mixdown to WAV, FLAC, OGG Vorbis, or MP3 (all via libsndfile)
 
