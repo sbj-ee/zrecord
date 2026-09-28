@@ -24,10 +24,24 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Input gain** (next to the mic volume): a digital gain in dB applied to
   the recording before the filters. The default, 0 dB, records exactly what
   the input delivers. It is remembered between sessions.
-- **INPUT CLIP light.** It comes on when the input itself reaches full
-  scale before any gain in zrecord (the clipping is already in the signal:
-  lower the interface gain or the mic volume). It latches until clicked,
-  and each take starts with it dark.
+- **INPUT CLIP light.** It comes on when the input itself clips before any
+  gain in zrecord (the clipping is already in the signal: lower the
+  interface gain or the mic volume). It latches until clicked, and each take
+  starts with it dark.
+- **Clip detection that ignores loud peaks.** Input counts as clipped only
+  after 3 or more consecutive samples at full scale in one channel. One
+  sample touching full scale is just a peak. Runs are followed across audio
+  buffers, so a clip split between two callbacks still counts once. For
+  16-bit sources, full scale means the integer extremes (32767 and -32768).
+  Float sources count at or beyond +/-1.0.
+- **Clip count per take.** INPUT CLIP shows how many times the input
+  clipped (e.g. "INPUT CLIP ×3", with the clipped-sample count in its
+  tooltip). After Stop the status bar says so too. The count stays until the
+  next take.
+- **Clipped audio is painted red** in the waveform, zoomed in or out. It
+  uses the same rule, from a clip flag in the waveform summaries, so the
+  marks come from the audio itself and survive editing, saving and
+  reopening.
 - **Mic volume above 100% is flagged.** The percentage turns amber, and its
   tooltip explains that the system is boosting the input in software, which
   easily clips a loud source before zrecord receives it.
