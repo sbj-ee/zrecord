@@ -87,12 +87,18 @@ private:
 // Feedback delay line producing repeating echoes.
 class EchoEffect {
 public:
+    // Allocates the delay line for delays up to `maxDelayMs`, so later
+    // configure() calls within that never allocate (real-time safe).
+    void reserve(double sampleRate, double maxDelayMs);
+    // Sets the delay, feedback and mix. Allocates only if the delay is longer
+    // than any reserved so far; otherwise keeps the line's contents.
     void configure(double sampleRate, double delayMs, double feedback, double mix);
     float process(float x);
     void reset();
 
 private:
-    std::vector<float> buffer_;
+    std::vector<float> buffer_; // capacity; the first length_ samples are the line
+    size_t length_ = 0;
     size_t writePos_ = 0;
     double feedback_ = 0.4;
     double mix_ = 0.5;

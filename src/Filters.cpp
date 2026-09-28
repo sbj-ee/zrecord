@@ -158,21 +158,43 @@ void RingModulator::reset() {
     phase_ = 0.0;
 }
 
+void EchoEffect::reserve(double sampleRate, double maxDelayMs) {
+    const size_t capacity = static_cast<size_t>(std::max(1.0, sampleRate * maxDelayMs / 1000.0));
+    if (capacity > buffer_.size()) {
+        buffer_.assign(capacity, 0.0f);
+        writePos_ = 0;
+    }
+}
+
 void EchoEffect::configure(double sampleRate, double delayMs, double feedback, double mix) {
-    size_t delaySamples = static_cast<size_t>(std::max(1.0, sampleRate * delayMs / 1000.0));
-    buffer_.assign(delaySamples, 0.0f);
-    writePos_ = 0;
+    const size_t delaySamples = static_cast<size_t>(std::max(1.0, sampleRate * delayMs / 1000.0));
+    if (delaySamples > buffer_.size()) {
+        buffer_.assign(delaySamples, 0.0f); // not reserved: the one allocating case
+        writePos_ = 0;
+    }
+    if (delaySamples != length_) {
+        // A new delay keeps what the line holds (no click from a flushed
+        // line); only the wrap point moves.
+        if (delaySamples > length_) {
+            std::fill(buffer_.begin() + static_cast<long>(length_), buffer_.begin() + static_cast<long>(delaySamples),
+                      0.0f);
+        }
+        length_ = delaySamples;
+        if (writePos_ >= length_) {
+            writePos_ = 0;
+        }
+    }
     feedback_ = feedback;
     mix_ = mix;
 }
 
 float EchoEffect::process(float x) {
-    if (buffer_.empty()) {
+    if (length_ == 0) {
         return x;
     }
     float delayed = buffer_[writePos_];
     buffer_[writePos_] = static_cast<float>(x + delayed * feedback_);
-    writePos_ = (writePos_ + 1) % buffer_.size();
+    writePos_ = (writePos_ + 1) % length_;
     return static_cast<float>(x + delayed * mix_);
 }
 
