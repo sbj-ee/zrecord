@@ -62,6 +62,7 @@ add_library(zrecord_core STATIC
     src/Capture.cpp
     src/Meter.cpp
     src/Dropouts.cpp
+    src/Effects.cpp
     src/Fft.cpp
     src/AudioFileWriter.cpp
     src/AudioFileReader.cpp
@@ -93,6 +94,7 @@ add_library(zrecord_gui STATIC
     src/NormalizeDialog.cpp
     src/VoiceChangerDialog.cpp
     src/PeakMeter.cpp
+    src/TrackEffectsDialog.cpp
 )
 
 target_link_libraries(zrecord_gui PUBLIC zrecord_core)

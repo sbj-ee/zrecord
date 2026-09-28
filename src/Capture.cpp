@@ -45,7 +45,7 @@ int64_t ClipDetector::feed(const float* interleaved, size_t frames) { return fee
 int64_t ClipDetector::feed(const int16_t* interleaved, size_t frames) { return feedImpl(interleaved, frames); }
 
 CapturePeaks processCaptureBlock(std::vector<float>& block, size_t frameCount, int channels, float inputGain,
-                                 FilterChain& chain, ClipDetector* inputClip) {
+                                 ClipDetector* inputClip) {
     CapturePeaks peaks;
     const size_t count = std::min(block.size(), frameCount * static_cast<size_t>(std::max(1, channels)));
     if (inputClip != nullptr) {
@@ -59,7 +59,6 @@ CapturePeaks processCaptureBlock(std::vector<float>& block, size_t frameCount, i
             block[i] *= inputGain;
         }
     }
-    chain.process(block, frameCount);
     for (size_t i = 0; i < count; ++i) {
         peaks.recorded = std::max(peaks.recorded, std::fabs(block[i]));
     }

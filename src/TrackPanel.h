@@ -42,6 +42,13 @@ public:
     // The panel doesn't own the project; a test needs the same pointer to set
     // up state that MainWindow will then react to.
     Project* projectForTest() const { return project_; }
+    // The FX button in a track's header (the current one, not one that's
+    // been replaced and is waiting for deleteLater).
+    QToolButton* fxButtonForTest(int trackIndex) const {
+        return trackIndex >= 0 && trackIndex < static_cast<int>(headers_.size())
+                   ? headers_[static_cast<size_t>(trackIndex)].fxButton
+                   : nullptr;
+    }
     // How many spectrogram tiles have been computed so far (cache misses).
     int spectrogramTilesRenderedForTest() const { return spectrogramTilesRendered_; }
     size_t selectedClipCountForTest() const { return selectedClips_.size(); }
@@ -103,6 +110,9 @@ signals:
     // header. These aren't undoable, but they do make the project unsaved.
     void trackSettingsChanged();
 
+    // The track header's FX button: edit that track's effect stack.
+    void effectsRequested(int trackIndex);
+
     // One finished envelope gesture: the curve before it and after it.
     void envelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& before,
                         const std::vector<EnvelopePoint>& after, const QString& what);
@@ -127,6 +137,7 @@ private:
         QWidget* container = nullptr;
         QToolButton* displayButton = nullptr;
         QLabel* nameLabel = nullptr;
+        QToolButton* fxButton = nullptr;
         QToolButton* muteButton = nullptr;
         QToolButton* soloButton = nullptr;
         QToolButton* armButton = nullptr;

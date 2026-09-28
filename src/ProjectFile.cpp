@@ -59,6 +59,22 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
         }
         trackObj["envelope"] = envelopeArray;
         trackObj["display"] = track.display == TrackDisplay::Spectrogram ? "spectrogram" : "waveform";
+        // The effect stack, in order. Parameters are saved by name, so adding
+        // one later (or reordering them in the table) keeps old files valid.
+        QJsonArray effectsArray;
+        for (const Effect& effect : track.effects) {
+            const EffectInfo& info = effectInfo(effect.type);
+            QJsonObject effectObj;
+            effectObj["type"] = info.key;
+            effectObj["bypassed"] = effect.bypassed;
+            QJsonObject params;
+            for (int p = 0; p < info.paramCount; ++p) {
+                params[info.params[p].key] = effect.param(p);
+            }
+            effectObj["params"] = params;
+            effectsArray.append(effectObj);
+        }
+        trackObj["effects"] = effectsArray;
 
         QJsonArray clipsArray;
         for (size_t c = 0; c < track.clips.size(); ++c) {
@@ -157,6 +173,25 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
                   [](const EnvelopePoint& a, const EnvelopePoint& b) { return a.frame < b.frame; });
         track.display = trackObj["display"].toString() == "spectrogram" ? TrackDisplay::Spectrogram
                                                                         : TrackDisplay::Waveform;
+        // Projects from before track effects have no "effects": an empty
+        // stack. An effect this version doesn't know is skipped (the rest of
+        // the stack still loads); a missing parameter takes its default.
+        for (const QJsonValue& effectValue : trackObj["effects"].toArray()) {
+            const QJsonObject effectObj = effectValue.toObject();
+            EffectType type;
+            if (!effectTypeFromKey(effectObj["type"].toString().toStdString(), type)) {
+                continue;
+            }
+            Effect effect = Effect::make(type);
+            effect.bypassed = effectObj["bypassed"].toBool(false);
+            const QJsonObject params = effectObj["params"].toObject();
+            const EffectInfo& info = effectInfo(type);
+            for (int p = 0; p < info.paramCount; ++p) {
+                effect.params[static_cast<size_t>(p)] = params[info.params[p].key].toDouble(info.params[p].defaultValue);
+            }
+            effect.clampParams();
+            track.effects.push_back(effect);
+        }
 
         for (const QJsonValue& clipValue : trackObj["clips"].toArray()) {
             QJsonObject clipObj = clipValue.toObject();

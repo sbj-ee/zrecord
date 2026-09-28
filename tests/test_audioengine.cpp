@@ -53,6 +53,7 @@ private slots:
     void playbackRunsWhileTheUiHoldsTheProjectMutex();
     void seekJumpsRunningPlayback();
     void playbackFeedsTheMeter();
+    void playbackMeterShowsThePostEffectsMix();
 
 private:
     QTemporaryDir home_;
@@ -174,6 +175,39 @@ void TestAudioEngine::playbackFeedsTheMeter() {
     QVERIFY(!all.clipped[0]);    // one sample at 0.8 is nowhere near
     blocks.clear();
     QCOMPARE(engine_->drainMeterBlocks(blocks), size_t(0)); // taken
+}
+
+void TestAudioEngine::playbackMeterShowsThePostEffectsMix() {
+    // Playback plays (and meters) each track through its effect stack: a
+    // -12 dB Gain effect on a 0.8 peak reads ~0.2 on the meter; bypassed, the
+    // same audio reads 0.8 again. The clip itself is untouched either way.
+    auto peakOf = [this](Project& project, bool& skipped) {
+        std::string error;
+        skipped = !engine_->startPlayback(project, error);
+        if (skipped) return 0.0f;
+        waitUntilIdle(*engine_);
+        engine_->stopPlayback();
+        std::vector<MeterBlock> blocks;
+        engine_->drainMeterBlocks(blocks);
+        MeterBlock all;
+        for (const MeterBlock& b : blocks) all.merge(b);
+        return all.peak[0];
+    };
+    Project project;
+    fill(project, 4410);
+    project.tracks[0].clips[0].samples.fill(100, 1, -0.8f);
+    Effect gain = Effect::make(EffectType::Gain);
+    gain.params[0] = -12.0f;
+    project.tracks[0].effects = {gain};
+    bool skipped = false;
+    const float wet = peakOf(project, skipped);
+    if (skipped) {
+        QSKIP("no usable output device");
+    }
+    QVERIFY2(std::fabs(wet - 0.8f * std::pow(10.0f, -12.0f / 20.0f)) < 1e-4f, qPrintable(QString::number(wet)));
+    project.tracks[0].effects[0].bypassed = true;
+    QCOMPARE(peakOf(project, skipped), 0.8f);
+    QCOMPARE(project.tracks[0].clips[0].samples.toVector()[100], -0.8f);
 }
 
 QTEST_GUILESS_MAIN(TestAudioEngine)

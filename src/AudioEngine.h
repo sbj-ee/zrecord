@@ -10,7 +10,6 @@
 #include "AudioEngineInterface.h"
 #include "Capture.h"
 #include "Dropouts.h"
-#include "Filters.h"
 #include "Meter.h"
 #include "PlaybackMixer.h"
 #include "RingBuffer.h"
@@ -19,8 +18,9 @@
 namespace zrecord {
 
 // Owns the PortAudio streams. Recording captures into a private scratch
-// buffer (through the live FilterChain) that the caller commits to a track
-// once stopped; playback mixes directly from a Project.
+// buffer (the raw input, with only the input gain applied) that the caller
+// commits to a track once stopped; playback mixes directly from a Project,
+// through each track's effect stack.
 class AudioEngine : public AudioEngineInterface {
 public:
     // Kept as an alias so existing call sites read unchanged.
@@ -39,8 +39,8 @@ public:
     void stopRecording() override;
     bool isRecording() const override;
 
-    // While muted, incoming audio is replaced with silence before it reaches
-    // the filter chain, so the take keeps running (and stays in sync) but
+    // While muted, incoming audio is replaced with silence before the input
+    // gain, so the take keeps running (and stays in sync) but
     // captures nothing -- a "cough button". Cleared by startRecording().
     void setInputMuted(bool muted) override;
     bool isInputMuted() const override;
@@ -58,9 +58,6 @@ public:
     void refreshPlayback() override;
     int64_t playbackFrame() const override { return playbackFrame_.load(std::memory_order_relaxed); }
     void seekPlayback(int64_t frame) override;
-
-    void setFilterSettings(const FilterSettings& settings) override;
-    FilterSettings filterSettings() const;
 
     void setInputGainDb(double db) override;
     double inputGainDb() const override;
@@ -113,14 +110,6 @@ private:
     // are all UI-thread.
     void drainCapture();
 
-    // Guards only the filter settings handoff, never the capture path. The
-    // audio thread takes it with try_lock, so it can never be blocked by the
-    // UI holding it.
-    mutable std::mutex settingsMutex_;
-    FilterSettings pendingSettings_;
-    std::atomic<bool> settingsDirty_{false};
-
-    FilterChain filterChain_;   // audio thread only, once recording starts
     std::vector<float> scratch_; // preallocated so the callback never allocates
     RingBuffer captureRing_;
     // Writes blocks into captureRing_, pads losses with silence and logs

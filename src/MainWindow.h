@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "AudioEngineInterface.h"
+#include "AudioFileWriter.h"
 #include "Project.h"
 #include "TrackPanel.h"
 #include "VoiceChanger.h"
@@ -15,7 +16,6 @@ class QPushButton;
 class QToolButton;
 class QLabel;
 class QMenu;
-class QCheckBox;
 class QDoubleSpinBox;
 class QSlider;
 class QTimer;
@@ -36,7 +36,6 @@ private slots:
     void onToggleRecord();
     void onTogglePlayback();
     void onExport();
-    void onFiltersChanged();
     void onTick();
     void onSeekRequested(int64_t frame);
     void refreshDevices();
@@ -59,9 +58,10 @@ private slots:
     void onFadeOut();
     void onNormalize();
     void onVoiceChanger();
+    void onEditTrackEffects(int trackIndex);
     void onAbout();
     void onCrossfade();
-    void onApplyEffect();
+    void onApplyTrackEffects();
     void onSelectAll();
     void onEnvelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& before,
                           const std::vector<EnvelopePoint>& after, const QString& what);
@@ -91,6 +91,11 @@ public:
     // and Save As do once they have a path).
     bool saveProjectTo(const QString& path, QString* error = nullptr);
 
+    // Renders the mixdown -- every track through its effect stack, gain and
+    // envelope -- and writes it (what Export Mixdown does once it has a path).
+    // False with `error` set if there's nothing to export or writing failed.
+    bool exportMixdownTo(const QString& path, AudioFormat format, std::string* error = nullptr);
+
     // File > Open Recent: the most recently opened or saved project folders,
     // newest first, kept in QSettings. Opening one asks about unsaved
     // changes first; one that fails to open is dropped from the list.
@@ -116,6 +121,10 @@ public:
     // preview is stopped when the dialog closes, as with exec().
     using VoiceChangerDialogDriver = std::function<bool(class VoiceChangerDialog&)>;
     void setVoiceChangerDialogDriverForTest(VoiceChangerDialogDriver driver) { voiceDriver_ = std::move(driver); }
+    // Same for a track's effects dialog; the driver returns the dialog's
+    // result code (QDialog::Accepted/Rejected or kBakeResult).
+    using TrackEffectsDialogDriver = std::function<int(class TrackEffectsDialog&)>;
+    void setTrackEffectsDialogDriverForTest(TrackEffectsDialogDriver driver) { effectsDriver_ = std::move(driver); }
     // The temporary project a running preview plays (null when none), and a
     // way to run the timer tick without waiting for it.
     const Project* previewProjectForTest() const { return previewActive_ ? previewProject_.get() : nullptr; }
@@ -132,8 +141,9 @@ private:
     // Menus reuse the same QActions the toolbar shows, so the two can't drift
     // apart and the menu advertises each shortcut for free.
     void buildMenus();
-    FilterSettings filterSettingsFromUi() const;
-    void applyFilterSettingsFromUi();
+    // The track Track Effects... and Apply Track Effects act on: the
+    // selection's track, else the armed one, else the only one (-1: none).
+    int effectsTargetTrack() const;
     void setControlsEnabled(bool recording);
     void queryInitialMicVolume();
     int findArmedTrackIndex() const;
@@ -188,6 +198,10 @@ private:
     UnsavedChangesPrompt unsavedPrompt_;
     NormalizeDialogDriver normalizeDriver_;
     VoiceChangerDialogDriver voiceDriver_;
+    TrackEffectsDialogDriver effectsDriver_;
+    // Sets a track's stack directly (no undo step) and lets running playback
+    // hear it: the effects dialog's live edits.
+    void setTrackEffectsLive(int trackIndex, const std::vector<Effect>& effects);
     // The engine reads the project it plays from the audio thread, so the
     // preview's project lives here until the preview is stopped.
     std::unique_ptr<Project> previewProject_;
@@ -201,7 +215,7 @@ private:
 
     QSlider* micVolumeSlider_ = nullptr;
     QLabel* micVolumeValueLabel_ = nullptr;
-    // Digital input gain (dB, default 0), applied before the filter chain and
+    // Digital input gain (dB, default 0), the only processing on a take, and
     // kept in QSettings: it belongs to the input setup, not to a project.
     QDoubleSpinBox* inputGainSpin_ = nullptr;
     // Latching "the input itself clipped" light: the raw signal reached full
@@ -264,7 +278,8 @@ private:
     QAction* backOneSecondAction_ = nullptr;
     QAction* forwardOneSecondAction_ = nullptr;
     QAction* exportAction_ = nullptr;
-    QAction* applyEffectAction_ = nullptr;
+    QAction* trackEffectsAction_ = nullptr;
+    QAction* applyTrackEffectsAction_ = nullptr;
     QAction* quitAction_ = nullptr;
     QAction* selectAllAction_ = nullptr;
 
@@ -280,39 +295,6 @@ private:
     std::vector<MeterBlock> meterBlocks_; // reused every tick
     QLabel* statusLabel_ = nullptr;
     TrackPanel* trackPanel_ = nullptr;
-
-    QCheckBox* limiterEnable_ = nullptr;
-    QSlider* limiterCeilingSlider_ = nullptr;
-    QLabel* limiterCeilingValueLabel_ = nullptr;
-
-    QCheckBox* gainEnable_ = nullptr;
-    QSlider* gainSlider_ = nullptr;
-    QLabel* gainValueLabel_ = nullptr;
-
-    QCheckBox* highPassEnable_ = nullptr;
-    QSlider* highPassSlider_ = nullptr;
-    QLabel* highPassValueLabel_ = nullptr;
-
-    QCheckBox* lowPassEnable_ = nullptr;
-    QSlider* lowPassSlider_ = nullptr;
-    QLabel* lowPassValueLabel_ = nullptr;
-
-    QCheckBox* noiseGateEnable_ = nullptr;
-    QSlider* noiseGateSlider_ = nullptr;
-    QLabel* noiseGateValueLabel_ = nullptr;
-    QSlider* noiseGateAttackSlider_ = nullptr;
-    QLabel* noiseGateAttackValueLabel_ = nullptr;
-    QSlider* noiseGateReleaseSlider_ = nullptr;
-    QLabel* noiseGateReleaseValueLabel_ = nullptr;
-
-    QCheckBox* compressorEnable_ = nullptr;
-    QSlider* compressorThresholdSlider_ = nullptr;
-    QLabel* compressorThresholdValueLabel_ = nullptr;
-    QSlider* compressorRatioSlider_ = nullptr;
-    QLabel* compressorRatioValueLabel_ = nullptr;
-
-    QComboBox* voiceEffectCombo_ = nullptr;
-    QPushButton* applyEffectButton_ = nullptr;
 
     QTimer* timer_ = nullptr;
 };

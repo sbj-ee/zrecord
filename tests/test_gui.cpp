@@ -17,6 +17,7 @@
 #include "FakeAudioEngine.h"
 #include "MainWindow.h"
 #include "AudioFileWriter.h"
+#include "AudioFileReader.h"
 #include "Capture.h"
 #include "Commands.h"
 #include "ProjectFile.h"
@@ -24,6 +25,9 @@
 #include "TrackPanel.h"
 #include "NormalizeDialog.h"
 #include "VoiceChangerDialog.h"
+#include "TrackEffectsDialog.h"
+#include <QListWidget>
+#include <QMenu>
 #include "PeakMeter.h"
 #include "zrecord_version.h"
 
@@ -91,6 +95,13 @@ private slots:
     void voiceChangerPresetsAndCustom();
     void voiceChangerPreviewThenApplyIsOneUndoStep();
     void voiceChangerCancelStopsPreviewAndChangesNothing();
+    void trackEffectsDialogAddsReordersAndBypasses();
+    void fxButtonEditsTheStackLiveAsOneUndoStep();
+    void fxDialogCancelRestoresTheStack();
+    void fxDialogApplyToAudioBakesAsOneUndoStep();
+    void ctrlRAppliesTheTargetTracksEffects();
+    void recordingKeepsTheTakeRawWithTrackEffects();
+    void exportIncludesTrackEffects();
     void amplifySelectedClips();
     void peakMeterBallisticsAndHold();
     void peakMeterClipLedLatchesUntilClicked();
@@ -264,7 +275,7 @@ void TestGui::mainWindowDisablesEditActionsWithoutASelection() {
     MainWindow window(std::make_unique<FakeAudioEngine>());
 
     for (const char* name : {"Cut", "Copy", "Delete", "Silence", "Fade In", "Fade Out",
-                                 "Crossfade", "Apply Filters to Selection"}) {
+                                 "Crossfade", "Apply Track Effects", "Track Effects..."}) {
         QVERIFY2(!actionEnabled(window, name),
                  qPrintable(QString("%1 was enabled with no selection").arg(name)));
     }
@@ -284,8 +295,7 @@ void TestGui::mainWindowEnablesEditActionsWithASelection() {
     project->selection.endFrame = 20000;
     window.refreshActionStateForTest();
 
-    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "Fade In", "Fade Out",
-                                 "Apply Filters to Selection"}) {
+    for (const char* name : {"Cut", "Copy", "Delete", "Silence", "Fade In", "Fade Out", "Track Effects..."}) {
         QVERIFY2(actionEnabled(window, name),
                  qPrintable(QString("%1 stayed disabled with a selection").arg(name)));
     }
@@ -1587,6 +1597,369 @@ void TestGui::voiceChangerCancelStopsPreviewAndChangesNothing() {
     QVERIFY(f.window->previewProjectForTest() == nullptr);
     QCOMPARE(undo->count(), before);
     QVERIFY(f.samples() == original);
+}
+
+namespace {
+
+QAction* dialogAction(TrackEffectsDialog& dialog, const QString& name) {
+    return dialog.findChild<QAction*>(name);
+}
+
+// Drives the dialog the way a user would: the Add menu, the spin boxes,
+// the move buttons and the row check boxes.
+void clickAdd(TrackEffectsDialog& dialog, const char* key) {
+    QAction* action = dialogAction(dialog, QString("add_%1").arg(key));
+    QVERIFY2(action != nullptr, key);
+    action->trigger();
+}
+
+void setSpin(TrackEffectsDialog& dialog, const char* paramKey, double value) {
+    auto* spin = dialog.findChild<QDoubleSpinBox*>(QString("param_%1").arg(paramKey));
+    QVERIFY2(spin != nullptr, paramKey);
+    spin->setValue(value);
+}
+
+void clickButton(TrackEffectsDialog& dialog, const char* name) {
+    auto* button = dialog.findChild<QAbstractButton*>(name);
+    QVERIFY2(button != nullptr, name);
+    QVERIFY2(button->isEnabled(), name);
+    QTest::mouseClick(button, Qt::LeftButton);
+}
+
+struct FxFixture {
+    FakeAudioEngine* engine = nullptr;
+    std::unique_ptr<MainWindow> window;
+    TrackPanel* panel = nullptr;
+    Project* project = nullptr;
+    QUndoStack* undo = nullptr;
+
+    FxFixture() {
+        auto fake = std::make_unique<FakeAudioEngine>();
+        engine = fake.get();
+        window = std::make_unique<MainWindow>(std::move(fake));
+        panel = window->findChild<TrackPanel*>();
+        project = panel->projectForTest();
+        project->channels = 1;
+        project->sampleRate = 44100.0;
+        Track track;
+        track.name = "Voice";
+        track.clips.push_back(makeClip(0, 4410, 0.25f));
+        project->tracks.push_back(std::move(track));
+        panel->refresh();
+        undo = window->findChild<QUndoStack*>();
+    }
+    std::vector<float> samples() const { return project->tracks[0].clips[0].samples.toVector(); }
+};
+
+} // namespace
+
+void TestGui::trackEffectsDialogAddsReordersAndBypasses() {
+    TrackEffectsDialog dialog("Voice", {});
+    int changes = 0;
+    connect(&dialog, &TrackEffectsDialog::effectsChanged, [&] { ++changes; });
+    auto* list = dialog.findChild<QListWidget*>("effectList");
+    QVERIFY(list != nullptr);
+    QCOMPARE(list->count(), 0);
+    QVERIFY(!dialog.findChild<QAbstractButton*>("removeEffect")->isEnabled());
+
+    clickAdd(dialog, "echo");
+    setSpin(dialog, "delayMs", 120.0);
+    clickAdd(dialog, "gain"); // goes after the current row
+    setSpin(dialog, "gainDb", -6.0);
+    QCOMPARE(list->count(), 2);
+    QCOMPARE(dialog.effects()[0].type, EffectType::Echo);
+    QCOMPARE(dialog.effects()[0].params[0], 120.0f);
+    QCOMPARE(dialog.effects()[1].type, EffectType::Gain);
+    QCOMPARE(dialog.effects()[1].params[0], -6.0f);
+    QCOMPARE(dialog.currentRow(), 1);
+
+    // Reorder: Gain up to the top, and the selection follows it.
+    clickButton(dialog, "moveEffectUp");
+    QCOMPARE(dialog.effects()[0].type, EffectType::Gain);
+    QCOMPARE(dialog.effects()[1].type, EffectType::Echo);
+    QCOMPARE(dialog.currentRow(), 0);
+    QVERIFY(!dialog.findChild<QAbstractButton*>("moveEffectUp")->isEnabled());
+    QVERIFY(list->item(0)->text().contains("Gain"));
+
+    // Unchecking a row bypasses it; the parameters stay.
+    list->item(1)->setCheckState(Qt::Unchecked);
+    QVERIFY(dialog.effects()[1].bypassed);
+    QCOMPARE(dialog.effects()[1].params[1] >= 0.0f, true);
+    list->item(1)->setCheckState(Qt::Checked);
+    QVERIFY(!dialog.effects()[1].bypassed);
+
+    // Selecting a row shows its own parameters.
+    dialog.setCurrentRow(1);
+    QVERIFY(dialog.findChild<QDoubleSpinBox*>("param_delayMs") != nullptr);
+    QCOMPARE(dialog.findChild<QDoubleSpinBox*>("param_delayMs")->value(), 120.0);
+
+    clickButton(dialog, "removeEffect");
+    QCOMPARE(dialog.effects().size(), size_t(1));
+    QCOMPARE(dialog.effects()[0].type, EffectType::Gain);
+    QVERIFY(changes >= 7);
+
+    // Every effect type can be added from the menu.
+    for (int t = 0; t < kEffectTypeCount; ++t) {
+        QVERIFY(dialogAction(dialog, QString("add_%1").arg(effectInfo(static_cast<EffectType>(t)).key)) != nullptr);
+    }
+    // Apply to Audio closes with its own result code.
+    clickButton(dialog, "bakeEffects");
+    QCOMPARE(dialog.result(), TrackEffectsDialog::kBakeResult);
+}
+
+void TestGui::fxButtonEditsTheStackLiveAsOneUndoStep() {
+    FxFixture f;
+    QToolButton* fx = f.panel->fxButtonForTest(0);
+    QVERIFY(fx != nullptr);
+    QVERIFY(!fx->property("active").toBool());
+    const int undoBefore = f.undo->count();
+
+    findAction(*f.window, "Play / Stop")->trigger();
+    QVERIFY(f.engine->isPlaying());
+
+    bool sawLive = false;
+    f.window->setTrackEffectsDialogDriverForTest([&](TrackEffectsDialog& dialog) {
+        const int refreshes = f.engine->refreshCalls();
+        clickAdd(dialog, "echo");
+        setSpin(dialog, "feedback", 0.5);
+        clickAdd(dialog, "gain");
+        setSpin(dialog, "gainDb", 3.0);
+        clickButton(dialog, "moveEffectUp");
+        dialog.findChild<QListWidget*>("effectList")->item(1)->setCheckState(Qt::Unchecked); // bypass the echo
+        // Heard while the dialog is still open: the project has the stack and
+        // playback was refreshed without a restart.
+        std::lock_guard<std::mutex> lock(f.project->mutex);
+        sawLive = f.project->tracks[0].effects == dialog.effects() && f.engine->refreshCalls() > refreshes
+                  && f.engine->startPlaybackCalls() == 1;
+        return int(QDialog::Accepted);
+    });
+    QTest::mouseClick(fx, Qt::LeftButton);
+    QVERIFY(sawLive);
+    QVERIFY(f.engine->isPlaying()); // editing effects doesn't stop playback
+
+    const std::vector<Effect>& fxNow = f.project->tracks[0].effects;
+    QCOMPARE(fxNow.size(), size_t(2));
+    QCOMPARE(fxNow[0].type, EffectType::Gain);
+    QCOMPARE(fxNow[0].params[0], 3.0f);
+    QCOMPARE(fxNow[1].type, EffectType::Echo);
+    QCOMPARE(fxNow[1].params[1], 0.5f);
+    QVERIFY(fxNow[1].bypassed);
+    QCOMPARE(f.undo->count(), undoBefore + 1);
+    QCOMPARE(f.undo->undoText(), QString("Track Effects"));
+    QVERIFY(f.window->isWindowModified());
+    fx = f.panel->fxButtonForTest(0);
+    QVERIFY(fx->property("active").toBool());
+    QVERIFY(fx->toolTip().contains("Gain"));
+    QVERIFY(fx->toolTip().contains("(Echo)"));
+
+    const std::vector<Effect> after = fxNow;
+    f.undo->undo();
+    QVERIFY(f.project->tracks[0].effects.empty());
+    QVERIFY(!f.panel->fxButtonForTest(0)->property("active").toBool());
+    f.undo->redo();
+    QVERIFY(f.project->tracks[0].effects == after);
+    findAction(*f.window, "Play / Stop")->trigger();
+}
+
+void TestGui::fxDialogCancelRestoresTheStack() {
+    FxFixture f;
+    f.project->tracks[0].effects = {Effect::make(EffectType::LowPass)};
+    f.panel->refresh();
+    const std::vector<Effect> original = f.project->tracks[0].effects;
+    const int undoBefore = f.undo->count();
+    bool changedWhileOpen = false;
+    f.window->setTrackEffectsDialogDriverForTest([&](TrackEffectsDialog& dialog) {
+        clickButton(dialog, "removeEffect");
+        clickAdd(dialog, "distortion");
+        changedWhileOpen = f.project->tracks[0].effects == dialog.effects() && f.project->tracks[0].effects != original;
+        return int(QDialog::Rejected);
+    });
+    QTest::mouseClick(f.panel->fxButtonForTest(0), Qt::LeftButton);
+    QVERIFY(changedWhileOpen);
+    QVERIFY(f.project->tracks[0].effects == original);
+    QCOMPARE(f.undo->count(), undoBefore);
+
+    // OK with nothing changed isn't an undo step either.
+    f.window->setTrackEffectsDialogDriverForTest([](TrackEffectsDialog&) { return int(QDialog::Accepted); });
+    QTest::mouseClick(f.panel->fxButtonForTest(0), Qt::LeftButton);
+    QCOMPARE(f.undo->count(), undoBefore);
+}
+
+void TestGui::fxDialogApplyToAudioBakesAsOneUndoStep() {
+    FxFixture f;
+    const std::vector<float> original = f.samples();
+    const int undoBefore = f.undo->count();
+    std::vector<Effect> stack;
+    f.window->setTrackEffectsDialogDriverForTest([&](TrackEffectsDialog& dialog) {
+        clickAdd(dialog, "gain");
+        setSpin(dialog, "gainDb", 6.0);
+        stack = dialog.effects();
+        clickButton(dialog, "bakeEffects");
+        return dialog.result();
+    });
+    QTest::mouseClick(f.panel->fxButtonForTest(0), Qt::LeftButton);
+
+    // The edit and the bake are one step, the audio now carries the gain, and
+    // the stack is empty so it isn't applied twice.
+    QCOMPARE(f.undo->count(), undoBefore + 1);
+    QCOMPARE(f.undo->undoText(), QString("Apply Track Effects"));
+    QVERIFY(f.project->tracks[0].effects.empty());
+    const float g = std::pow(10.0f, 6.0f / 20.0f);
+    const std::vector<float> baked = f.samples();
+    QCOMPARE(baked.size(), original.size());
+    for (size_t i = 0; i < baked.size(); i += 441) {
+        QVERIFY(std::abs(baked[i] - original[i] * g) < 1e-6f);
+    }
+    QVERIFY(!f.panel->fxButtonForTest(0)->property("active").toBool());
+    // Undo goes back to before the dialog: the original audio, no stack.
+    f.undo->undo();
+    QVERIFY(f.samples() == original);
+    QVERIFY(f.project->tracks[0].effects.empty());
+    f.undo->redo();
+    QVERIFY(f.samples() == baked);
+    QVERIFY(f.project->tracks[0].effects.empty());
+
+    // Baking a stack that was already there: undo brings the stack back.
+    f.undo->undo();
+    f.project->tracks[0].effects = stack;
+    f.panel->refresh();
+    const int undoBefore2 = f.undo->index();
+    f.window->setTrackEffectsDialogDriverForTest([&](TrackEffectsDialog& dialog) {
+        clickButton(dialog, "bakeEffects");
+        return dialog.result();
+    });
+    QTest::mouseClick(f.panel->fxButtonForTest(0), Qt::LeftButton);
+    QCOMPARE(f.undo->index(), undoBefore2 + 1);
+    QCOMPARE(f.undo->undoText(), QString("Apply Track Effects"));
+    QVERIFY(f.samples() == baked);
+    QVERIFY(f.project->tracks[0].effects.empty());
+    f.undo->undo();
+    QVERIFY(f.samples() == original);
+    QVERIFY(f.project->tracks[0].effects == stack);
+}
+
+void TestGui::ctrlRAppliesTheTargetTracksEffects() {
+    FxFixture f;
+    Track second;
+    second.name = "Other";
+    second.clips.push_back(makeClip(0, 4410, 0.5f));
+    f.project->tracks.push_back(std::move(second));
+    f.panel->refresh();
+    QAction* apply = findAction(*f.window, "Apply Track Effects");
+    QVERIFY(apply != nullptr);
+    QCOMPARE(apply->shortcut(), QKeySequence("Ctrl+R"));
+
+    // No stack, or two tracks and nothing says which: nothing to apply.
+    f.window->refreshActionStateForTest();
+    QVERIFY(!apply->isEnabled());
+    Effect gain = Effect::make(EffectType::Gain);
+    gain.params[0] = -6.0f;
+    f.project->tracks[1].effects = {gain};
+    f.window->refreshActionStateForTest();
+    QVERIFY(!apply->isEnabled());
+
+    // The armed track is the target without a selection...
+    f.project->tracks[1].recordArmed = true;
+    f.window->refreshActionStateForTest();
+    QVERIFY(apply->isEnabled());
+    // ...a selection on another track overrides it...
+    f.project->selection.trackIndex = 0;
+    f.project->selection.startFrame = 0;
+    f.project->selection.endFrame = 100;
+    f.window->refreshActionStateForTest();
+    QVERIFY(!apply->isEnabled());
+    f.project->selection = Selection{};
+    f.window->refreshActionStateForTest();
+    QVERIFY(apply->isEnabled());
+    // ...and it's off while recording, and when the only effect is bypassed.
+    f.window->setControlsEnabledForTest(true);
+    QVERIFY(!apply->isEnabled());
+    f.window->setControlsEnabledForTest(false);
+    QVERIFY(apply->isEnabled());
+
+    const std::vector<float> original = f.project->tracks[1].clips[0].samples.toVector();
+    const int undoBefore = f.undo->count();
+    f.window->show();
+    QVERIFY(QTest::qWaitForWindowActive(f.window.get()));
+    QTest::keySequence(f.window.get(), QKeySequence("Ctrl+R"));
+    QCOMPARE(f.undo->count(), undoBefore + 1);
+    QCOMPARE(f.undo->undoText(), QString("Apply Track Effects"));
+    QVERIFY(f.project->tracks[1].effects.empty());
+    QVERIFY(std::abs(f.project->tracks[1].clips[0].samples.toVector()[10] - 0.5f * std::pow(10.0f, -6.0f / 20.0f)) < 1e-6f);
+    QVERIFY(f.samples() == std::vector<float>(4410, 0.25f)); // the other track is untouched
+    QVERIFY(!apply->isEnabled()); // nothing left to apply
+    f.undo->undo();
+    QVERIFY(f.project->tracks[1].clips[0].samples.toVector() == original);
+    QVERIFY(f.project->tracks[1].effects == std::vector<Effect>{gain});
+    QVERIFY(apply->isEnabled());
+    f.project->tracks[1].effects[0].bypassed = true;
+    f.window->refreshActionStateForTest();
+    QVERIFY(!apply->isEnabled());
+}
+
+void TestGui::recordingKeepsTheTakeRawWithTrackEffects() {
+    // The armed track has loud, obvious effects configured: the take is still
+    // exactly what the engine captured, and the effects stay on the track to
+    // be heard on playback.
+    FxFixture f;
+    Effect gain = Effect::make(EffectType::Gain);
+    gain.params[0] = 12.0f;
+    f.project->tracks[0].effects = {gain, Effect::make(EffectType::Echo), Effect::make(EffectType::Distortion),
+                                    Effect::make(EffectType::Limiter)};
+    const std::vector<Effect> stack = f.project->tracks[0].effects;
+    f.project->tracks[0].recordArmed = true;
+    f.panel->refresh();
+
+    std::vector<float> captured(4410);
+    uint32_t seed = 7;
+    for (float& v : captured) {
+        seed = seed * 1664525u + 1013904223u;
+        v = float(int32_t(seed >> 8) - (1 << 23)) / float(1 << 24); // +-0.5 noise
+    }
+    QPushButton* record = findButton(*f.window, "●  RECORD");
+    QVERIFY(record != nullptr);
+    record->click();
+    QVERIFY(f.engine->isRecording());
+    f.engine->setCapturedBuffer(captured);
+    record->click();
+    QVERIFY(!f.engine->isRecording());
+
+    QCOMPARE(f.project->tracks[0].clips.size(), size_t(2));
+    QVERIFY(f.project->tracks[0].clips[1].samples.toVector() == captured); // bit-exact
+    QVERIFY(f.project->tracks[0].effects == stack);
+    QVERIFY(f.panel->fxButtonForTest(0)->property("active").toBool());
+
+    // Played back, the take is heard through the stack.
+    std::vector<float> dry, wet;
+    Project copy;
+    copy.channels = 1;
+    copy.sampleRate = f.project->sampleRate;
+    copy.tracks.push_back(f.project->tracks[0]);
+    wet = copy.renderMixdown();
+    copy.tracks[0].effects.clear();
+    dry = copy.renderMixdown();
+    QVERIFY(wet != dry);
+}
+
+void TestGui::exportIncludesTrackEffects() {
+    // Export Mixdown writes what playback plays: through each track's stack.
+    FxFixture f;
+    Effect gain = Effect::make(EffectType::Gain);
+    gain.params[0] = -12.0f;
+    f.project->tracks[0].effects = {gain};
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("mix.wav");
+    std::string error;
+    QVERIFY(f.window->exportMixdownTo(path, AudioFormat::Wav, &error));
+    std::vector<float> samples;
+    int channels = 0;
+    int rate = 0;
+    QVERIFY(AudioFileReader::read(path.toStdString(), samples, rate, channels, error));
+    QCOMPARE(channels, 1);
+    QCOMPARE(samples.size(), size_t(4410));
+    const float expected = 0.25f * std::pow(10.0f, -12.0f / 20.0f);
+    QVERIFY2(std::abs(samples[100] - expected) < 1e-4f, qPrintable(QString::number(samples[100])));
 }
 
 QTEST_MAIN(TestGui)

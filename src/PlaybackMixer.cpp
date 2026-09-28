@@ -4,13 +4,24 @@
 
 namespace zrecord {
 
-std::shared_ptr<const PlaybackSnapshot> PlaybackSnapshot::capture(const Project& project) {
+std::shared_ptr<const PlaybackSnapshot> PlaybackSnapshot::capture(const Project& project,
+                                                                  std::shared_ptr<EffectRack> reuse) {
     auto snapshot = std::make_shared<PlaybackSnapshot>();
     std::lock_guard<std::mutex> lock(project.mutex);
     snapshot->tracks = project.tracks; // clip headers only; audio is shared
     snapshot->channels = project.channels;
+    snapshot->sampleRate = project.sampleRate;
     for (const auto& track : snapshot->tracks) {
         snapshot->lengthFrames = std::max(snapshot->lengthFrames, track.endFrame());
+    }
+    if (anyTrackHasEffects(snapshot->tracks)) {
+        if (reuse && reuse->sameStructure(snapshot->tracks, snapshot->sampleRate, snapshot->channels)) {
+            reuse->publish(snapshot->tracks); // parameters only: state carries on
+            snapshot->effects = std::move(reuse);
+        } else {
+            snapshot->effects = std::make_shared<EffectRack>();
+            snapshot->effects->prepare(snapshot->tracks, snapshot->sampleRate, snapshot->channels);
+        }
     }
     return snapshot;
 }
@@ -50,7 +61,8 @@ bool PlaybackMixer::render(int64_t position, float* out, size_t frames, int outC
     if (snapshot == nullptr || snapshot->channels != outChannels) {
         std::fill(out, out + frames * static_cast<size_t>(std::max(outChannels, 0)), 0.0f);
     } else {
-        Project::mixTracks(snapshot->tracks, snapshot->channels, position, static_cast<int64_t>(frames), out);
+        Project::mixTracks(snapshot->tracks, snapshot->channels, position, static_cast<int64_t>(frames), out,
+                           snapshot->effects.get());
         more = position + static_cast<int64_t>(frames) < snapshot->lengthFrames;
     }
     renderSeq_.fetch_add(1); // even: done with `snapshot`

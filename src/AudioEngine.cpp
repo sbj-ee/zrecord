@@ -74,12 +74,6 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
 
     // All of this happens before the stream starts, so the audio thread is not
     // running yet and none of it needs guarding.
-    filterChain_.prepare(sampleRate_, channels_);
-    {
-        std::lock_guard<std::mutex> lock(settingsMutex_);
-        filterChain_.setSettings(pendingSettings_);
-        settingsDirty_.store(false, std::memory_order_relaxed);
-    }
     captureBuffer_.clear();
     consumedOffset_ = 0;
     inputMeterFeed_.reset(channels_);
@@ -255,7 +249,7 @@ void AudioEngine::refreshPlayback() {
     if (playbackProject_ == nullptr || outputStream_ == nullptr) {
         return;
     }
-    mixer_.publish(PlaybackSnapshot::capture(*playbackProject_));
+    mixer_.publish(PlaybackSnapshot::capture(*playbackProject_, mixer_.currentEffects()));
 }
 
 bool AudioEngine::isPlaying() const {
@@ -263,23 +257,6 @@ bool AudioEngine::isPlaying() const {
         return false;
     }
     return Pa_IsStreamActive(outputStream_) == 1;
-}
-
-void AudioEngine::setFilterSettings(const FilterSettings& settings) {
-    std::lock_guard<std::mutex> lock(settingsMutex_);
-    pendingSettings_ = settings;
-    settingsDirty_.store(true, std::memory_order_release);
-    if (!recording_.load()) {
-        // Nothing is running, so apply it directly rather than waiting for a
-        // callback that will not come.
-        filterChain_.setSettings(settings);
-        settingsDirty_.store(false, std::memory_order_relaxed);
-    }
-}
-
-FilterSettings AudioEngine::filterSettings() const {
-    std::lock_guard<std::mutex> lock(settingsMutex_);
-    return pendingSettings_;
 }
 
 void AudioEngine::drainCapture() {
@@ -368,17 +345,8 @@ int AudioEngine::outputCallbackStatic(const void* /*input*/, void* output, unsig
 
 int AudioEngine::handleInput(const float* input, unsigned long frameCount, bool overflow, double adcTime) {
     // Real-time thread. No allocation, no blocking lock, no unbounded growth:
-    // the scratch block is preallocated, settings are picked up with try_lock,
-    // and the samples leave via a lock-free ring the UI drains.
-    if (settingsDirty_.load(std::memory_order_acquire)) {
-        // try_lock, never lock: if the UI happens to hold it this instant we
-        // simply use the current settings for one more block.
-        std::unique_lock<std::mutex> lock(settingsMutex_, std::try_to_lock);
-        if (lock.owns_lock()) {
-            filterChain_.setSettings(pendingSettings_);
-            settingsDirty_.store(false, std::memory_order_relaxed);
-        }
-    }
+    // the scratch block is preallocated, the input gain is an atomic, and the
+    // samples leave via a lock-free ring the UI drains.
 
     // Input the host dropped before this callback (paInputOverflow) becomes
     // silence of the measured length, ahead of this block.
@@ -406,12 +374,13 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount, bool 
             // silence, and the level meter correctly reads zero.
             std::fill_n(scratch_.begin(), count, 0.0f);
         }
-        // Input gain, then the filter chain. The meter follows what is
-        // recorded, so gain or an effect that pushes the take past full scale
-        // shows up (and lights CLIP) instead of hiding behind the raw level.
-        // The raw input is also checked for clipping (runs of full-scale
-        // samples, carried across callbacks) before the gain touches it.
-        processCaptureBlock(scratch_, frames, channels_, gain, filterChain_, &inputClip_);
+        // Input gain only: the take is the raw input (a track's effects are
+        // applied on playback). The meter follows what is recorded, so gain
+        // that pushes the take past full scale shows up (and lights CLIP)
+        // instead of hiding behind the raw level. The raw input is also
+        // checked for clipping (runs of full-scale samples, carried across
+        // callbacks) before the gain touches it.
+        processCaptureBlock(scratch_, frames, channels_, gain, &inputClip_);
         inputMeterFeed_.addSignal(scratch_.data(), frames); // what the take gets
         captureWriter_.write(scratch_.data(), frames); // or logs it lost, if the ring is full
     }

@@ -68,30 +68,38 @@ private:
     int64_t endFrame_;
 };
 
-// Runs a selection through a FilterChain configured with `settings` and
-// writes the result back in place (same length, same clip boundaries). The
-// chain starts from a clean state, so attack/release-style filters (noise
-// gate, compressor, limiter) don't carry over context from audio before the
-// selection -- a known limitation of applying an effect to an isolated span.
-class ApplyEffectCommand : public TrackEditCommand {
+// Replaces a track's effect stack (add, remove, reorder, bypass or change
+// parameters: whatever the effects dialog did) as one undoable step.
+class SetTrackEffectsCommand : public QUndoCommand {
 public:
-    ApplyEffectCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,
-                        const FilterSettings& settings, double sampleRate, int channels);
+    SetTrackEffectsCommand(Project& project, int trackIndex, std::vector<Effect> before, std::vector<Effect> after);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    Project& project_;
+    int trackIndex_;
+    std::vector<Effect> before_;
+    std::vector<Effect> after_;
+};
+
+// Bakes a track's effect stack into its clips and clears the stack, as one
+// undo step: afterwards the track sounds the same (its clips hold what the
+// stack produced) but the audio is no longer raw. The stack is rendered over
+// the whole track from its start, exactly as playback from the start hears
+// it; anything it adds between or after clips (an echo tail in a gap) has no
+// clip to live in and is lost.
+class BakeTrackEffectsCommand : public TrackEditCommand {
+public:
+    BakeTrackEffectsCommand(Project& project, int trackIndex);
 
 protected:
     void apply() override;
-
-private:
-    int64_t startFrame_;
-    int64_t endFrame_;
-    FilterSettings settings_;
-    double sampleRate_;
-    int channels_;
 };
 
 // Ramps the selection from silence to unity, or unity to silence, in place.
-// Same read-process-write shape as ApplyEffectCommand, but the ramp is
-// positioned across the selection rather than driven by the filter panel.
+// A read-process-write edit of the selection, the ramp positioned across it.
 class FadeCommand : public TrackEditCommand {
 public:
     FadeCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,

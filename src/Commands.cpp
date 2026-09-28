@@ -50,26 +50,34 @@ void SilenceSelectionCommand::apply() {
     Project::silenceRange(track(), startFrame_, endFrame_, project().channels);
 }
 
-ApplyEffectCommand::ApplyEffectCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,
-                                        const FilterSettings& settings, double sampleRate, int channels)
-    : TrackEditCommand(project, trackIndex, "Apply Effect"),
-      startFrame_(startFrame),
-      endFrame_(endFrame),
-      settings_(settings),
-      sampleRate_(sampleRate),
-      channels_(channels) {}
+SetTrackEffectsCommand::SetTrackEffectsCommand(Project& project, int trackIndex, std::vector<Effect> before,
+                                               std::vector<Effect> after)
+    : QUndoCommand("Track Effects"),
+      project_(project),
+      trackIndex_(trackIndex),
+      before_(std::move(before)),
+      after_(std::move(after)) {}
 
-void ApplyEffectCommand::apply() {
-    std::vector<float> region = Project::copyRange(track(), startFrame_, endFrame_, channels_);
-    if (region.empty()) {
-        return;
-    }
-    FilterChain chain;
-    chain.prepare(sampleRate_, channels_);
-    chain.setSettings(settings_);
-    int64_t frameCount = channels_ > 0 ? static_cast<int64_t>(region.size()) / channels_ : 0;
-    chain.process(region, static_cast<size_t>(frameCount));
-    Project::writeRange(track(), startFrame_, endFrame_, region, channels_);
+void SetTrackEffectsCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.tracks[static_cast<size_t>(trackIndex_)].effects = after_;
+}
+
+void SetTrackEffectsCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.tracks[static_cast<size_t>(trackIndex_)].effects = before_;
+}
+
+BakeTrackEffectsCommand::BakeTrackEffectsCommand(Project& project, int trackIndex)
+    : TrackEditCommand(project, trackIndex, "Apply Track Effects") {}
+
+void BakeTrackEffectsCommand::apply() {
+    // TrackEditCommand snapshots the whole track (clips and stack), so undo
+    // brings back both the raw audio and the effects.
+    const std::vector<float> rendered =
+        Project::renderTrackEffects(track(), project().sampleRate, project().channels);
+    Project::writeRange(track(), 0, track().endFrame(), rendered, project().channels);
+    track().effects.clear();
 }
 
 FadeCommand::FadeCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,

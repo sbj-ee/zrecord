@@ -378,47 +378,136 @@ void Project::readMix(int64_t startFrame, int64_t frameCount, std::vector<float>
     mixTracks(tracks, channels, startFrame, frameCount, out.data());
 }
 
+namespace {
+// Adds `track`'s clips over [startFrame, startFrame+frameCount) into `out`
+// (frameCount*channels), each sample times gainAt(frame).
+template <typename GainAt>
+void addClips(const Track& track, int channels, int64_t startFrame, int64_t frameCount, float* out,
+              GainAt gainAt) {
+    const size_t outSize = static_cast<size_t>(frameCount) * static_cast<size_t>(channels);
+    for (const auto& clip : track.clips) {
+        int64_t overlapStart = std::max(clip.startFrame, startFrame);
+        int64_t overlapEnd = std::min(clip.endFrame(), startFrame + frameCount);
+        if (overlapStart >= overlapEnd) {
+            continue;
+        }
+        int64_t clipLocalStart = overlapStart - clip.startFrame;
+        int64_t outLocalStart = overlapStart - startFrame;
+        int64_t overlapFrames = overlapEnd - overlapStart;
+        for (int64_t f = 0; f < overlapFrames; ++f) {
+            const float frameGain = gainAt(overlapStart + f);
+            for (int c = 0; c < channels; ++c) {
+                size_t srcIndex = static_cast<size_t>(clipLocalStart + f) * channels + c;
+                size_t dstIndex = static_cast<size_t>(outLocalStart + f) * channels + c;
+                if (srcIndex < clip.samples.size() && dstIndex < outSize) {
+                    out[dstIndex] += clip.samples[srcIndex] * frameGain;
+                }
+            }
+        }
+    }
+}
+} // namespace
+
+void EffectRack::prepare(const std::vector<Track>& tracks, double sampleRate, int channels) {
+    sampleRate_ = sampleRate;
+    channels_ = std::max(1, channels);
+    stacks_.clear();
+    for (const Track& track : tracks) {
+        std::unique_ptr<EffectStack> stack;
+        if (!track.effects.empty()) {
+            stack = std::make_unique<EffectStack>();
+            stack->prepare(track.effects, sampleRate_, channels_);
+        }
+        stacks_.push_back(std::move(stack));
+    }
+    scratch_.assign(static_cast<size_t>(kBlockFrames) * static_cast<size_t>(channels_), 0.0f);
+    nextPosition_ = -1;
+}
+
+bool EffectRack::sameStructure(const std::vector<Track>& tracks, double sampleRate, int channels) const {
+    if (sampleRate != sampleRate_ || std::max(1, channels) != channels_ || tracks.size() != stacks_.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < tracks.size(); ++i) {
+        const EffectStack* stack = stacks_[i].get();
+        if (stack == nullptr ? !tracks[i].effects.empty() : !stack->sameStructure(tracks[i].effects)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void EffectRack::publish(const std::vector<Track>& tracks) {
+    for (size_t i = 0; i < tracks.size() && i < stacks_.size(); ++i) {
+        if (stacks_[i]) {
+            stacks_[i]->publish(tracks[i].effects);
+        }
+    }
+}
+
+void EffectRack::beginRender(int64_t position, int64_t frames) {
+    if (position != nextPosition_) {
+        for (auto& stack : stacks_) {
+            if (stack) stack->reset();
+        }
+    }
+    nextPosition_ = position + frames;
+}
+
+bool anyTrackHasEffects(const std::vector<Track>& tracks) {
+    return std::any_of(tracks.begin(), tracks.end(), [](const Track& t) { return !t.effects.empty(); });
+}
+
 void Project::mixTracks(const std::vector<Track>& tracks, int channels, int64_t startFrame,
-                        int64_t frameCount, float* out) {
+                        int64_t frameCount, float* out, EffectRack* rack) {
     if (channels <= 0 || frameCount <= 0) {
         return;
     }
     const size_t outSize = static_cast<size_t>(frameCount) * static_cast<size_t>(channels);
     std::fill(out, out + outSize, 0.0f);
+    if (rack != nullptr) {
+        rack->beginRender(startFrame, frameCount);
+    }
 
     bool anySolo = std::any_of(tracks.begin(), tracks.end(), [](const Track& t) { return t.soloed; });
 
-    for (const auto& track : tracks) {
+    for (size_t t = 0; t < tracks.size(); ++t) {
+        const Track& track = tracks[t];
         bool audible = anySolo ? track.soloed : !track.muted;
         if (!audible) {
             continue;
         }
         float gain = static_cast<float>(std::pow(10.0, track.gainDb / 20.0));
 
-        for (const auto& clip : track.clips) {
-            int64_t overlapStart = std::max(clip.startFrame, startFrame);
-            int64_t overlapEnd = std::min(clip.endFrame(), startFrame + frameCount);
-            if (overlapStart >= overlapEnd) {
-                continue;
-            }
-            int64_t clipLocalStart = overlapStart - clip.startFrame;
-            int64_t outLocalStart = overlapStart - startFrame;
-            int64_t overlapFrames = overlapEnd - overlapStart;
-
-            for (int64_t f = 0; f < overlapFrames; ++f) {
-                // The envelope is sampled per frame rather than per block, so
-                // a steep curve doesn't step. Points are few, so the lookup is
-                // a short binary search.
-                float frameGain = gain * track.envelopeGainAt(overlapStart + f);
-                for (int c = 0; c < channels; ++c) {
-                    size_t srcIndex = static_cast<size_t>(clipLocalStart + f) * channels + c;
-                    size_t dstIndex = static_cast<size_t>(outLocalStart + f) * channels + c;
-                    if (srcIndex < clip.samples.size() && dstIndex < outSize) {
-                        out[dstIndex] += clip.samples[srcIndex] * frameGain;
+        EffectStack* stack = rack != nullptr ? rack->stack(t) : nullptr;
+        if (stack != nullptr && stack->update()) {
+            // The track alone, at unity, through its stack in slices (the
+            // scratch buffer is preallocated); then its gain and envelope.
+            // Frames with no clip are processed too, so echoes ring out.
+            float* scratch = rack->scratch();
+            for (int64_t done = 0; done < frameCount; done += EffectRack::kBlockFrames) {
+                const int64_t n = std::min(EffectRack::kBlockFrames, frameCount - done);
+                const size_t count = static_cast<size_t>(n) * static_cast<size_t>(channels);
+                std::fill(scratch, scratch + count, 0.0f);
+                addClips(track, channels, startFrame + done, n, scratch, [](int64_t) { return 1.0f; });
+                stack->process(scratch, static_cast<size_t>(n));
+                float* dst = out + static_cast<size_t>(done) * static_cast<size_t>(channels);
+                for (int64_t f = 0; f < n; ++f) {
+                    const float frameGain = gain * track.envelopeGainAt(startFrame + done + f);
+                    for (int c = 0; c < channels; ++c) {
+                        const size_t i = static_cast<size_t>(f) * static_cast<size_t>(channels) + static_cast<size_t>(c);
+                        dst[i] += scratch[i] * frameGain;
                     }
                 }
             }
+            continue;
         }
+
+        // The envelope is sampled per frame rather than per block, so a steep
+        // curve doesn't step. Points are few, so the lookup is a short binary
+        // search.
+        addClips(track, channels, startFrame, frameCount, out,
+                 [&track, gain](int64_t frame) { return gain * track.envelopeGainAt(frame); });
     }
 
     for (size_t i = 0; i < outSize; ++i) {
@@ -428,10 +517,48 @@ void Project::mixTracks(const std::vector<Track>& tracks, int channels, int64_t 
 
 std::vector<float> Project::renderMixdown() const {
     int64_t length = lengthFrames();
-    std::vector<float> out(static_cast<size_t>(length) * static_cast<size_t>(channels), 0.0f);
-    {
-        std::lock_guard<std::mutex> lock(mutex);
+    std::vector<float> out(static_cast<size_t>(length) * static_cast<size_t>(std::max(channels, 0)), 0.0f);
+    if (channels <= 0 || length <= 0) {
+        return out;
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!anyTrackHasEffects(tracks)) {
         readMix(0, length, out);
+        return out;
+    }
+    // Effects are stateful: render from the start, in order, as playback
+    // from the start does.
+    EffectRack rack;
+    rack.prepare(tracks, sampleRate, channels);
+    constexpr int64_t kChunk = 65536;
+    for (int64_t pos = 0; pos < length; pos += kChunk) {
+        const int64_t n = std::min(kChunk, length - pos);
+        mixTracks(tracks, channels, pos, n, out.data() + static_cast<size_t>(pos) * static_cast<size_t>(channels), &rack);
+    }
+    return out;
+}
+
+std::vector<float> Project::renderTrackEffects(const Track& track, double sampleRate, int channels) {
+    const int64_t length = track.endFrame();
+    channels = std::max(1, channels);
+    std::vector<float> out(static_cast<size_t>(std::max<int64_t>(0, length)) * static_cast<size_t>(channels), 0.0f);
+    if (length <= 0) {
+        return out;
+    }
+    addClips(track, channels, 0, length, out.data(), [](int64_t) { return 1.0f; });
+    if (track.effects.empty()) {
+        return out;
+    }
+    // Same slices as playback, so the result matches it sample for sample.
+    // Not clamped: clips may exceed full scale (only the final mix is).
+    EffectStack stack;
+    stack.prepare(track.effects, sampleRate, channels);
+    if (!stack.update()) {
+        return out;
+    }
+    for (int64_t pos = 0; pos < length; pos += EffectRack::kBlockFrames) {
+        const int64_t n = std::min(EffectRack::kBlockFrames, length - pos);
+        stack.process(out.data() + static_cast<size_t>(pos) * static_cast<size_t>(channels), static_cast<size_t>(n));
     }
     return out;
 }

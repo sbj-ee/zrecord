@@ -158,21 +158,43 @@ void RingModulator::reset() {
     phase_ = 0.0;
 }
 
+void EchoEffect::reserve(double sampleRate, double maxDelayMs) {
+    const size_t capacity = static_cast<size_t>(std::max(1.0, sampleRate * maxDelayMs / 1000.0));
+    if (capacity > buffer_.size()) {
+        buffer_.assign(capacity, 0.0f);
+        writePos_ = 0;
+    }
+}
+
 void EchoEffect::configure(double sampleRate, double delayMs, double feedback, double mix) {
-    size_t delaySamples = static_cast<size_t>(std::max(1.0, sampleRate * delayMs / 1000.0));
-    buffer_.assign(delaySamples, 0.0f);
-    writePos_ = 0;
+    const size_t delaySamples = static_cast<size_t>(std::max(1.0, sampleRate * delayMs / 1000.0));
+    if (delaySamples > buffer_.size()) {
+        buffer_.assign(delaySamples, 0.0f); // not reserved: the one allocating case
+        writePos_ = 0;
+    }
+    if (delaySamples != length_) {
+        // A new delay keeps what the line holds (no click from a flushed
+        // line); only the wrap point moves.
+        if (delaySamples > length_) {
+            std::fill(buffer_.begin() + static_cast<long>(length_), buffer_.begin() + static_cast<long>(delaySamples),
+                      0.0f);
+        }
+        length_ = delaySamples;
+        if (writePos_ >= length_) {
+            writePos_ = 0;
+        }
+    }
     feedback_ = feedback;
     mix_ = mix;
 }
 
 float EchoEffect::process(float x) {
-    if (buffer_.empty()) {
+    if (length_ == 0) {
         return x;
     }
     float delayed = buffer_[writePos_];
     buffer_[writePos_] = static_cast<float>(x + delayed * feedback_);
-    writePos_ = (writePos_ + 1) % buffer_.size();
+    writePos_ = (writePos_ + 1) % length_;
     return static_cast<float>(x + delayed * mix_);
 }
 
@@ -242,147 +264,6 @@ void Distortion::configure(double driveAmount) {
 
 float Distortion::process(float x) const {
     return static_cast<float>(std::tanh(driveAmount_ * x) / normalizer_);
-}
-
-void FilterChain::prepare(double sampleRate, int channels) {
-    // The one structural step: sizes every per-channel stage and allocates
-    // the echo lines. Called before the stream starts, never from the audio
-    // callback.
-    sampleRate_ = sampleRate;
-    channels_ = std::max(1, channels);
-    const auto n = static_cast<size_t>(channels_);
-    limiter_.assign(n, Limiter{});
-    highPass_.assign(n, Biquad{});
-    lowPass_.assign(n, Biquad{});
-    noiseGate_.assign(n, NoiseGate{});
-    compressor_.assign(n, Compressor{});
-    ringMod_.assign(n, RingModulator{});
-    echo_.assign(n, EchoEffect{});
-    pitchShifter_.assign(n, PitchShifter{});
-    distortion_.assign(n, Distortion{});
-    for (int c = 0; c < channels_; ++c) {
-        // Fixed-parameter effects: configured once here.
-        ringMod_[c].configure(sampleRate_, 30.0);
-        echo_[c].configure(sampleRate_, 280.0, 0.35, 0.5);
-        distortion_[c].configure(6.0);
-    }
-    applyParameters();
-    for (int c = 0; c < channels_; ++c) {
-        limiter_[c].reset();
-        highPass_[c].reset();
-        lowPass_[c].reset();
-        noiseGate_[c].reset();
-        compressor_[c].reset();
-        ringMod_[c].reset();
-        echo_[c].reset();
-        pitchShifter_[c].reset();
-    }
-}
-
-void FilterChain::setSettings(const FilterSettings& settings) {
-    if (limiter_.size() != static_cast<size_t>(channels_)) {
-        settings_ = settings;
-        prepare(sampleRate_, channels_); // never prepared: size things first
-        return;
-    }
-    // Parameter changes only: recompute coefficients in place and keep every
-    // stage's running state, so dragging a slider mid-take neither allocates
-    // on the audio thread nor clicks, re-attacks the gate or cuts the echo.
-    const FilterSettings previous = settings_;
-    settings_ = settings;
-    applyParameters();
-
-    // A stage that was off has stale state from whenever it last ran; start
-    // it from rest instead.
-    for (int c = 0; c < channels_; ++c) {
-        if (settings.limiterEnabled && !previous.limiterEnabled) limiter_[c].reset();
-        if (settings.highPassEnabled && !previous.highPassEnabled) highPass_[c].reset();
-        if (settings.lowPassEnabled && !previous.lowPassEnabled) lowPass_[c].reset();
-        if (settings.noiseGateEnabled && !previous.noiseGateEnabled) noiseGate_[c].reset();
-        if (settings.compressorEnabled && !previous.compressorEnabled) compressor_[c].reset();
-        if (settings.voiceEffect != previous.voiceEffect) {
-            ringMod_[c].reset();
-            echo_[c].reset();
-            pitchShifter_[c].reset();
-        }
-    }
-}
-
-FilterSettings FilterChain::settings() const {
-    return settings_;
-}
-
-void FilterChain::applyParameters() {
-    double pitchRatio = 1.0;
-    if (settings_.voiceEffect == VoiceEffect::DeepVoice) {
-        pitchRatio = 0.75;
-    } else if (settings_.voiceEffect == VoiceEffect::Chipmunk) {
-        pitchRatio = 1.5;
-    }
-    for (int c = 0; c < channels_; ++c) {
-        limiter_[c].configure(sampleRate_, settings_.limiterCeilingDb, 50.0);
-        highPass_[c].configure(Biquad::Type::HighPass, sampleRate_, settings_.highPassHz);
-        lowPass_[c].configure(Biquad::Type::LowPass, sampleRate_, settings_.lowPassHz);
-        noiseGate_[c].configure(sampleRate_, settings_.noiseGateThresholdDb,
-                                 settings_.noiseGateAttackMs, settings_.noiseGateReleaseMs);
-        compressor_[c].configure(sampleRate_, settings_.compressorThresholdDb,
-                                  settings_.compressorRatio, 10.0, 150.0);
-        pitchShifter_[c].configure(pitchRatio);
-    }
-}
-
-void FilterChain::process(std::vector<float>& interleaved, size_t frameCount) {
-    double gainLinear = settings_.gainEnabled ? std::pow(10.0, settings_.gainDb / 20.0) : 1.0;
-
-    for (size_t i = 0; i < frameCount; ++i) {
-        for (int c = 0; c < channels_; ++c) {
-            size_t idx = i * static_cast<size_t>(channels_) + static_cast<size_t>(c);
-            float sample = interleaved[idx];
-
-            if (settings_.gainEnabled) {
-                sample = static_cast<float>(sample * gainLinear);
-            }
-            if (settings_.highPassEnabled) {
-                sample = highPass_[c].process(sample);
-            }
-            if (settings_.lowPassEnabled) {
-                sample = lowPass_[c].process(sample);
-            }
-            if (settings_.noiseGateEnabled) {
-                sample = noiseGate_[c].process(sample);
-            }
-            if (settings_.compressorEnabled) {
-                sample = compressor_[c].process(sample);
-            }
-
-            switch (settings_.voiceEffect) {
-                case VoiceEffect::Robot:
-                    sample = ringMod_[c].process(sample);
-                    break;
-                case VoiceEffect::Echo:
-                    sample = echo_[c].process(sample);
-                    break;
-                case VoiceEffect::DeepVoice:
-                case VoiceEffect::Chipmunk:
-                    sample = pitchShifter_[c].process(sample);
-                    break;
-                case VoiceEffect::Distortion:
-                    sample = distortion_[c].process(sample);
-                    break;
-                case VoiceEffect::None:
-                    break;
-            }
-
-            // Last, so nothing after it can push the signal back over the
-            // ceiling: gain, the compressor and the voice effects (echo adds
-            // its delayed copy on top) all run before it.
-            if (settings_.limiterEnabled) {
-                sample = limiter_[c].process(sample);
-            }
-
-            interleaved[idx] = sample;
-        }
-    }
 }
 
 void applyLinearFade(std::vector<float>& interleaved, int channels, FadeShape shape) {

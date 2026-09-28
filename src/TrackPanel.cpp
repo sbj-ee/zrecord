@@ -213,7 +213,28 @@ void TrackPanel::rebuildHeaders() {
         layout->setSpacing(2);
 
         header.nameLabel = new QLabel(QString::fromStdString(project_->tracks[i].name), header.container);
-        layout->addWidget(header.nameLabel);
+        auto* nameRow = new QHBoxLayout();
+        nameRow->setSpacing(2);
+        nameRow->addWidget(header.nameLabel, 1);
+        header.fxButton = new QToolButton(header.container);
+        header.fxButton->setObjectName("fx");
+        header.fxButton->setText("FX");
+        header.fxButton->setAutoRaise(false);
+        {
+            const std::vector<Effect>& fx = project_->tracks[i].effects;
+            const bool active = anyEffectActive(fx);
+            header.fxButton->setProperty("active", active);
+            // Lit while the track has an active effect, so a track that
+            // doesn't sound like its waveform says so.
+            header.fxButton->setStyleSheet(active ? "QToolButton { background-color: #7c4dff; color: white; "
+                                                    "font-weight: bold; border-radius: 3px; padding: 0 3px; }"
+                                                  : "QToolButton { padding: 0 3px; }");
+            header.fxButton->setToolTip(fx.empty() ? QString("Track effects (none)")
+                                                   : QString("Track effects: %1").arg(QString::fromStdString(describeEffects(fx))));
+        }
+        nameRow->addWidget(header.fxButton);
+        layout->addLayout(nameRow);
+        connect(header.fxButton, &QToolButton::clicked, this, [this, index] { emit effectsRequested(index); });
 
         auto* buttonRow = new QHBoxLayout();
         header.muteButton = new QToolButton(header.container);
