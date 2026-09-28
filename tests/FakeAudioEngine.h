@@ -65,7 +65,11 @@ public:
     void setFilterSettings(const FilterSettings& settings) override { settings_ = settings; }
     FilterSettings settings() const { return settings_; }
 
+    void setInputGainDb(double db) override { inputGainDb_ = db; }
+    double inputGainDb() const override { return inputGainDb_; }
     float takeMeterPeak() override { return std::exchange(meterPeak_, 0.0f); }
+    float takeInputPeak() override { return std::exchange(inputPeak_, 0.0f); }
+    void setInputPeak(float peak) { inputPeak_ = peak; }
     void setMeterPeak(float peak) { meterPeak_ = peak; }
     double capturedSeconds() const override { return 0.0; }
     std::vector<float> copyCapturedBuffer() const override { return captured_; }
@@ -93,6 +97,8 @@ private:
     int64_t playbackFrame_ = 0;
     int64_t lastSeek_ = -1;
     float meterPeak_ = 0.0f;
+    float inputPeak_ = 0.0f;
+    double inputGainDb_ = 0.0;
     FilterSettings settings_;
     std::vector<float> captured_;
 };

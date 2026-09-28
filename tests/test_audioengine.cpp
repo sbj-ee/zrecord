@@ -47,6 +47,7 @@ class TestAudioEngine : public QObject {
 
 private slots:
     void initTestCase();
+    void cleanup();
     void naturalEndDoesNotLeakTheStream();
     void naturalEndReleasesTheProject();
     void playbackRunsWhileTheUiHoldsTheProjectMutex();
@@ -66,6 +67,12 @@ void TestAudioEngine::initTestCase() {
     asoundrc.close();
     qputenv("HOME", home_.path().toUtf8());
     engine_ = std::make_unique<AudioEngine>(); // Pa_Initialize reads the config
+}
+
+void TestAudioEngine::cleanup() {
+    // A failed check returns early; don't leave playback running into the next
+    // test (it would skip with "Already playing").
+    engine_->stopPlayback();
 }
 
 void TestAudioEngine::naturalEndDoesNotLeakTheStream() {
@@ -139,7 +146,9 @@ void TestAudioEngine::seekJumpsRunningPlayback() {
         QSKIP(qPrintable(QString("no usable output device: %1").arg(QString::fromStdString(error))));
     }
     engine_->seekPlayback(436590);
-    QVERIFY(engine_->playbackFrame() >= 436590);
+    // No check of playbackFrame() right here: on the null device the callback
+    // runs flat out, and a block that started just before the seek can still
+    // report its own position once before it takes the seek up.
     QVERIFY2(waitUntilIdle(*engine_, 3000), "playback didn't jump to the seek point");
     QVERIFY(engine_->playbackFrame() >= 441000);
     engine_->stopPlayback();

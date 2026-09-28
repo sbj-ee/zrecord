@@ -14,6 +14,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QDoubleSpinBox>
+#include <QFontMetrics>
 #include <QKeySequence>
 #include <QFileDialog>
 #include <QGridLayout>
@@ -41,6 +43,7 @@
 #include "AudioEngine.h"
 #include "AudioFileReader.h"
 #include "AudioFileWriter.h"
+#include "Capture.h"
 #include "Commands.h"
 #include "ProjectFile.h"
 #include "Resampler.h"
@@ -134,7 +137,38 @@ void MainWindow::buildUi() {
     micVolumeSlider_->setValue(50);
     micRow->addWidget(micVolumeSlider_, 1);
     micVolumeValueLabel_ = new QLabel("50%");
+    micVolumeValueLabel_->setObjectName("micVolumeValue");
+    micVolumeValueLabel_->setMinimumWidth(QFontMetrics(micVolumeValueLabel_->font()).horizontalAdvance("150%") + 6);
     micRow->addWidget(micVolumeValueLabel_);
+    micRow->addSpacing(16);
+
+    micRow->addWidget(new QLabel("Input gain:"));
+    inputGainSpin_ = new QDoubleSpinBox();
+    inputGainSpin_->setObjectName("inputGain");
+    inputGainSpin_->setRange(kInputGainMinDb, kInputGainMaxDb);
+    inputGainSpin_->setDecimals(1);
+    inputGainSpin_->setSingleStep(0.5);
+    inputGainSpin_->setSuffix(" dB");
+    inputGainSpin_->setToolTip("Digital gain on the recorded signal, before the filters. 0 dB records exactly "
+                               "what the input delivers. The level meter shows the result.");
+    inputGainSpin_->setValue(QSettings().value(kInputGainKey, 0.0).toDouble());
+    micRow->addWidget(inputGainSpin_);
+    engine_->setInputGainDb(inputGainSpin_->value());
+    connect(inputGainSpin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
+        engine_->setInputGainDb(db);
+        QSettings().setValue(kInputGainKey, db);
+    });
+
+    inputClipIndicator_ = new QToolButton();
+    inputClipIndicator_->setObjectName("inputClip");
+    inputClipIndicator_->setText("INPUT CLIP");
+    inputClipIndicator_->setAutoRaise(false);
+    inputClipIndicator_->setToolTip("Lights when the input reaches full scale before any gain in zrecord: the "
+                                    "clipping is already in the signal. Lower the interface gain or the mic input "
+                                    "volume. Click to clear.");
+    connect(inputClipIndicator_, &QToolButton::clicked, this, [this] { setInputClipLit(false); });
+    micRow->addWidget(inputClipIndicator_);
+    setInputClipLit(false);
     rootLayout->addLayout(micRow);
     connect(micVolumeSlider_, &QSlider::valueChanged, this, &MainWindow::onMicVolumeChanged);
     connect(deviceCombo_, &QComboBox::currentIndexChanged, this, [this](int) { onInputDeviceChanged(); });
@@ -649,12 +683,33 @@ void MainWindow::queryInitialMicVolume() {
         micVolumeSlider_->blockSignals(true);
         micVolumeSlider_->setValue(percent);
         micVolumeSlider_->blockSignals(false);
-        micVolumeValueLabel_->setText(QString("%1%").arg(percent));
+        showMicVolume(percent); // the real level, even past the slider's end
     }
 }
 
+void MainWindow::showMicVolume(int percent) {
+    micVolumeValueLabel_->setText(QString("%1%").arg(percent));
+    // Above 100% the sound server amplifies in software before zrecord gets
+    // the signal; a loud source then clips there, where no setting in
+    // zrecord can undo it. Say so rather than presenting it as normal.
+    const bool boosted = percent > 100;
+    micVolumeValueLabel_->setStyleSheet(boosted ? "QLabel { color: #ffa000; font-weight: bold; }" : QString());
+    micVolumeValueLabel_->setToolTip(boosted ? "Above 100% the system boosts the input in software, which "
+                                               "easily clips a loud source before it reaches zrecord."
+                                             : QString());
+}
+
+void MainWindow::setInputClipLit(bool lit) {
+    inputClipIndicator_->setProperty("lit", lit);
+    inputClipIndicator_->setStyleSheet(
+        lit ? "QToolButton { background-color: #d50000; color: white; font-weight: bold; font-size: 10px;"
+              " border: 1px solid #ff8a80; border-radius: 3px; padding: 2px 6px; }"
+            : "QToolButton { background-color: #3a1c1c; color: #8a5a5a; font-weight: bold; font-size: 10px;"
+              " border: 1px solid #5a2d2d; border-radius: 3px; padding: 2px 6px; }");
+}
+
 void MainWindow::onMicVolumeChanged(int value) {
-    micVolumeValueLabel_->setText(QString("%1%").arg(value));
+    showMicVolume(value);
     QProcess::startDetached("pactl", {"set-source-volume", "@DEFAULT_SOURCE@", QString("%1%").arg(value)});
 }
 
@@ -847,6 +902,8 @@ void MainWindow::onToggleRecord() {
             setControlsEnabled(true);
             trackPanel_->beginLiveCapture(armedIndex);
             recordingMuteButton_->setChecked(false); // startRecording() clears the engine's mute
+            engine_->takeInputPeak();              // a fresh take starts with a dark INPUT CLIP
+            setInputClipLit(false);
             recordingBar_->show();
         } else {
             QMessageBox::warning(this, "Recording failed", QString::fromStdString(error));
@@ -1705,6 +1762,9 @@ void MainWindow::onTick() {
     levelMeter_->setPeak(engine_->takeMeterPeak());
 
     if (engine_->isRecording()) {
+        if (engine_->takeInputPeak() >= kInputClipLevel) {
+            setInputClipLit(true); // latches until clicked or the next take
+        }
         double captured = engine_->capturedSeconds();
         statusLabel_->setText(QString("Recording... %1").arg(formatDuration(captured)));
 

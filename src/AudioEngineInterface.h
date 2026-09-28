@@ -50,11 +50,20 @@ public:
 
     virtual void setFilterSettings(const FilterSettings& settings) = 0;
 
-    // The largest |sample| since the previous call: the raw input while
-    // recording, the mixed output while playing. Drives the level meter;
-    // taking the maximum since the last read means a clipped block between
-    // two UI ticks still registers.
+    // Digital input gain, in dB, applied to the captured signal before the
+    // filter chain. 0 dB (the default) records exactly what arrives.
+    virtual void setInputGainDb(double db) = 0;
+    virtual double inputGainDb() const = 0;
+
+    // The largest |sample| since the previous call: while recording, what is
+    // written to the take (after input gain and the filter chain); while
+    // playing, the mixed output. Drives the level meter; taking the maximum
+    // since the last read means a clipped block between two UI ticks still
+    // registers.
     virtual float takeMeterPeak() = 0;
+    // The largest raw input |sample| since the previous call, before any
+    // gain: reaching kInputClipLevel means the input itself clipped.
+    virtual float takeInputPeak() = 0;
     virtual double capturedSeconds() const = 0;
     virtual std::vector<float> copyCapturedBuffer() const = 0;
     virtual std::vector<float> consumeNewSamples() = 0;

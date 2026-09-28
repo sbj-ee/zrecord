@@ -37,6 +37,14 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure
 
+      # ctest reports a QSKIP as a pass. Run the suites that need an ALSA
+      # device again so the log shows whether they really ran.
+      - name: Audio device tests (show skips)
+        working-directory: build
+        run: |
+          ./tests/test_capture
+          ./tests/test_audioengine
+
       - name: Package (.deb)
         working-directory: build
         run: cpack -G DEB

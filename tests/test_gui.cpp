@@ -1,4 +1,6 @@
 #include <QComboBox>
+#include <QDoubleSpinBox>
+#include <QToolButton>
 #include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
@@ -14,6 +16,7 @@
 #include "FakeAudioEngine.h"
 #include "MainWindow.h"
 #include "AudioFileWriter.h"
+#include "Capture.h"
 #include "Commands.h"
 #include "ProjectFile.h"
 #include "SavedProjectPaths.h"
@@ -74,6 +77,8 @@ private slots:
     void mainWindowRecordsWithTheDevicesChannelCount();
     void playheadFollowsPlayback();
     void recordingStopsPlayback();
+    void inputGainDefaultsToZeroAndIsRemembered();
+    void inputClipIndicatorLatchesPerTake();
     void clipSelectionIsDroppedWhenTracksChange();
     void rulerClickSeeksWhileStopped();
     void seekingAndAutoScrollDuringPlayback();
@@ -785,6 +790,68 @@ void TestGui::recordingStopsPlayback() {
     QVERIFY(!fake->isPlaying());
     QCOMPARE(fake->stopPlaybackCalls(), 1);
     QCOMPARE(play->text(), QString("▶  Play"));
+    record->click();
+}
+
+void TestGui::inputGainDefaultsToZeroAndIsRemembered() {
+    QSettings().clear();
+    {
+        auto engine = std::make_unique<FakeAudioEngine>();
+        FakeAudioEngine* fake = engine.get();
+        MainWindow window(std::move(engine));
+        auto* gain = window.findChild<QDoubleSpinBox*>("inputGain");
+        QVERIFY(gain != nullptr);
+        QCOMPARE(gain->value(), 0.0);
+        QCOMPARE(fake->inputGainDb(), 0.0); // unity unless asked otherwise
+        QCOMPARE(gain->suffix(), QString(" dB"));
+        gain->setValue(-4.5);
+        QCOMPARE(fake->inputGainDb(), -4.5);
+        gain->setValue(100.0); // clamped to the range
+        QCOMPARE(gain->value(), kInputGainMaxDb);
+        gain->setValue(-4.5);
+    }
+    {
+        // It belongs to the input setup, so the next session starts with it.
+        auto engine = std::make_unique<FakeAudioEngine>();
+        FakeAudioEngine* fake = engine.get();
+        MainWindow window(std::move(engine));
+        QCOMPARE(window.findChild<QDoubleSpinBox*>("inputGain")->value(), -4.5);
+        QCOMPARE(fake->inputGainDb(), -4.5);
+    }
+    QSettings().clear();
+}
+
+void TestGui::inputClipIndicatorLatchesPerTake() {
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    auto* led = window.findChild<QToolButton*>("inputClip");
+    QVERIFY(led != nullptr);
+    QVERIFY(!led->property("lit").toBool());
+    QPushButton* record = findButton(window, "●  RECORD");
+    record->click(); // creates and arms Track 1
+    QVERIFY(fake->isRecording());
+
+    fake->setInputPeak(0.9f);
+    window.tickForTest();
+    QVERIFY(!led->property("lit").toBool());
+    fake->setInputPeak(kInputClipLevel);
+    window.tickForTest();
+    QVERIFY(led->property("lit").toBool());
+    fake->setInputPeak(0.1f);
+    window.tickForTest();
+    QVERIFY(led->property("lit").toBool()); // latched
+    led->click();
+    QVERIFY(!led->property("lit").toBool());
+
+    fake->setInputPeak(1.0f);
+    window.tickForTest();
+    QVERIFY(led->property("lit").toBool());
+    record->click(); // stop
+    // A new take starts dark, even with a stale peak left in the engine.
+    fake->setInputPeak(1.0f);
+    record->click();
+    QVERIFY(!led->property("lit").toBool());
     record->click();
 }
 
