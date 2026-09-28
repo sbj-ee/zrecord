@@ -62,6 +62,21 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   callback never allocates or locks. If the display falls behind, buffers
   are merged, never dropped, so short peaks and clips always reach the
   meter.
+- **Dropout detection.** zrecord now notices when input is lost while
+  recording: the driver reports it dropped input (an input overflow), or
+  zrecord itself could not keep up and its capture buffer overflowed. Each
+  lost stretch is **filled with silence of the same length**, so everything
+  recorded after it stays in time with the clock and the other tracks. We
+  chose this over closing the gap, which would shift the rest of the take
+  earlier. After Stop, each dropout becomes a label over the gap, e.g.
+  "Dropout 12 ms". Losses less than 100 ms apart share one label
+  ("Dropout ×2, 18 ms"). If the driver can't say how much was lost, a point
+  label "Dropout (length unknown)" marks the spot and nothing is padded.
+  The status bar sums it up ("3 dropouts, 40 ms lost"). Undo removes the
+  take and its labels in one step. The audio callback records all of this
+  without allocating, locking or logging. The driver's timestamps are used
+  only to measure a loss the driver reports. On their own they jitter too
+  much on common Linux audio setups to prove one.
 
 ## [1.1.1] - 2026-09-25
 

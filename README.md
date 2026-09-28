@@ -17,6 +17,7 @@ A Qt6 multi-track audio recorder and editor for Linux, with a live input filter 
 - Playback of the mixed project with a moving playhead; click the ruler to seek, stopped or playing
 - dB level meter per channel: RMS bar, peak bar, peak hold with readout and a latching clip light, plus an optional input (pre-gain) tick; range and decay are set from its right-click menu. It shows what is being recorded (after input gain and live filters), or the playback mix
 - Clipped audio (runs of full-scale samples) is painted red in the waveform
+- Dropout detection: input lost while recording (a driver overflow, or zrecord falling behind) is filled with silence of the same length, so the rest of the take stays in sync, and marked with a "Dropout 12 ms" label; the status bar gives the count and total lost after Stop
 - Export a mixdown to WAV, FLAC, OGG Vorbis, or MP3 (all via libsndfile)
 
 ## Keyboard shortcuts
@@ -131,4 +132,5 @@ The .deb links dynamically against the system's libraries, each under its own li
 
 ## Notes
 
+- If a take shows "Dropout" labels, input was lost there and replaced with silence (so the rest stays in time). Frequent dropouts usually mean the system is overloaded or the audio device's buffer is too small for it.
 - If recording or playback seems stalled or silent, check your system's mic input volume/mute state (e.g. via `wpctl status` or your desktop's sound settings) before assuming it's an app bug.
