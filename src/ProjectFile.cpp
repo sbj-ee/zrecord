@@ -16,28 +16,7 @@
 
 namespace zrecord {
 
-bool ProjectFile::save(const Project& project, const std::string& folderPath, std::string& errorMessage) {
-    QDir dir(QString::fromStdString(folderPath));
-    if (!dir.exists() && !dir.mkpath(".")) {
-        errorMessage = "Could not create project folder";
-        return false;
-    }
-
-    // Saving is all-or-nothing. Clip audio goes into a fresh directory that
-    // nothing references yet, project.json is replaced atomically
-    // (QSaveFile: write a temp file, then rename), and only then are the
-    // previous save's audio directories removed. A save that fails anywhere
-    // leaves the previous project exactly as it was, and clips deleted since
-    // the last save don't linger as stale WAVs.
-    const QString audioDirName = "audio-" + QUuid::createUuid().toString(QUuid::Id128).left(12);
-    if (!dir.mkdir(audioDirName)) {
-        errorMessage = "Could not create the project's audio folder";
-        return false;
-    }
-    auto abandon = [&dir, &audioDirName]() { QDir(dir.filePath(audioDirName)).removeRecursively(); };
-
-    std::lock_guard<std::mutex> lock(project.mutex);
-
+QJsonObject ProjectFile::manifest(const Project& project, const ClipFileNamer& clipFile) {
     QJsonObject root;
     root["sampleRate"] = project.sampleRate;
     root["channels"] = project.channels;
@@ -79,22 +58,8 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
         QJsonArray clipsArray;
         for (size_t c = 0; c < track.clips.size(); ++c) {
             const Clip& clip = track.clips[c];
-            QString relativeFile = QString("%1/track%2_clip%3.wav").arg(audioDirName).arg(t).arg(c);
-            QString absoluteFile = dir.filePath(relativeFile);
-
-            // Float, not 24-bit PCM: a project must reopen exactly as saved,
-            // and clips can legitimately exceed +/-1.0 (gain, echo) -- only
-            // the final mixdown is clamped. Older projects saved as 24-bit
-            // still load; the reader takes whatever the file holds.
-            if (!AudioFileWriter::writeFloatWav(absoluteFile.toStdString(), clip.samples,
-                                                 static_cast<int>(project.sampleRate), clip.channels,
-                                                 errorMessage)) {
-                abandon();
-                return false;
-            }
-
             QJsonObject clipObj;
-            clipObj["file"] = relativeFile;
+            clipObj["file"] = clipFile(t, c, clip);
             clipObj["startFrame"] = QString::number(clip.startFrame);
             clipsArray.append(clipObj);
         }
@@ -114,6 +79,53 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
         labelsArray.append(labelObj);
     }
     root["labels"] = labelsArray;
+    return root;
+}
+
+bool ProjectFile::save(const Project& project, const std::string& folderPath, std::string& errorMessage,
+                       ClipFileMap* savedFiles) {
+    QDir dir(QString::fromStdString(folderPath));
+    if (!dir.exists() && !dir.mkpath(".")) {
+        errorMessage = "Could not create project folder";
+        return false;
+    }
+
+    // Saving is all-or-nothing. Clip audio goes into a fresh directory that
+    // nothing references yet, project.json is replaced atomically
+    // (QSaveFile: write a temp file, then rename), and only then are the
+    // previous save's audio directories removed. A save that fails anywhere
+    // leaves the previous project exactly as it was, and clips deleted since
+    // the last save don't linger as stale WAVs.
+    const QString audioDirName = "audio-" + QUuid::createUuid().toString(QUuid::Id128).left(12);
+    if (!dir.mkdir(audioDirName)) {
+        errorMessage = "Could not create the project's audio folder";
+        return false;
+    }
+    auto abandon = [&dir, &audioDirName]() { QDir(dir.filePath(audioDirName)).removeRecursively(); };
+
+    std::lock_guard<std::mutex> lock(project.mutex);
+
+    bool ok = true;
+    ClipFileMap written;
+    const QJsonObject root = manifest(project, [&](size_t t, size_t c, const Clip& clip) {
+        const QString relativeFile = QString("%1/track%2_clip%3.wav").arg(audioDirName).arg(t).arg(c);
+        const QString absoluteFile = dir.absoluteFilePath(relativeFile);
+        // Float, not 24-bit PCM: a project must reopen exactly as saved,
+        // and clips can legitimately exceed +/-1.0 (gain, echo) -- only
+        // the final mixdown is clamped. Older projects saved as 24-bit
+        // still load; the reader takes whatever the file holds.
+        if (ok && !AudioFileWriter::writeFloatWav(absoluteFile.toStdString(), clip.samples,
+                                                  static_cast<int>(project.sampleRate), clip.channels,
+                                                  errorMessage)) {
+            ok = false;
+        }
+        written[clip.samples.contentId()] = absoluteFile;
+        return relativeFile;
+    });
+    if (!ok) {
+        abandon();
+        return false;
+    }
 
     const QByteArray json = QJsonDocument(root).toJson();
     QSaveFile jsonFile(dir.filePath("project.json"));
@@ -131,10 +143,14 @@ bool ProjectFile::save(const Project& project, const std::string& folderPath, st
             QDir(dir.filePath(name)).removeRecursively();
         }
     }
+    if (savedFiles != nullptr) {
+        *savedFiles = std::move(written);
+    }
     return true;
 }
 
-bool ProjectFile::load(Project& project, const std::string& folderPath, std::string& errorMessage) {
+bool ProjectFile::load(Project& project, const std::string& folderPath, std::string& errorMessage,
+                       ClipFileMap* loadedFiles) {
     QDir dir(QString::fromStdString(folderPath));
     QFile jsonFile(dir.filePath("project.json"));
     if (!jsonFile.open(QIODevice::ReadOnly)) {
@@ -146,12 +162,20 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
         errorMessage = "Invalid project file";
         return false;
     }
-    QJsonObject root = doc.object();
-
     // Parse everything into a scratch project first. A missing or unreadable
     // clip used to abort half-way through, leaving `project` wiped (and the
     // caller's undo history pointing at tracks that no longer existed).
     Project loaded;
+    if (!parseManifest(doc.object(), dir, loaded, errorMessage, loadedFiles)) {
+        return false;
+    }
+    replace(project, loaded);
+    return true;
+}
+
+bool ProjectFile::parseManifest(const QJsonObject& root, const QDir& dir, Project& loaded, std::string& errorMessage,
+                                ClipFileMap* loadedFiles) {
+    ClipFileMap files;
     loaded.sampleRate = root["sampleRate"].toDouble(44100.0);
     loaded.channels = root["channels"].toInt(2);
 
@@ -195,17 +219,19 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
 
         for (const QJsonValue& clipValue : trackObj["clips"].toArray()) {
             QJsonObject clipObj = clipValue.toObject();
-            QString relativeFile = clipObj["file"].toString();
+            // Relative to the project folder; the autosave journal also
+            // refers to files elsewhere by absolute path (filePath keeps those).
+            const QString file = dir.absoluteFilePath(clipObj["file"].toString());
             int64_t startFrame = clipObj["startFrame"].toString().toLongLong();
 
             Clip clip;
             clip.startFrame = startFrame;
             int sampleRate = 0;
             std::vector<float> samples;
-            if (!AudioFileReader::read(dir.filePath(relativeFile).toStdString(), samples,
-                                        sampleRate, clip.channels, errorMessage)) {
+            if (!AudioFileReader::read(file.toStdString(), samples, sampleRate, clip.channels, errorMessage)) {
                 return false;
             }
+            bool resampled = false;
             if (sampleRate != static_cast<int>(loaded.sampleRate)) {
                 // zrecord always writes clips at the project rate; a clip that
                 // isn't (hand-assembled project) would play at the wrong speed.
@@ -215,9 +241,13 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
                     return false;
                 }
                 samples = std::move(converted);
+                resampled = true;
             }
             clip.samples = SampleBuffer(samples);
             clip.peaks.build(clip.samples, clip.channels);
+            if (!resampled) {
+                files[clip.samples.contentId()] = file;
+            }
             track.clips.push_back(std::move(clip));
         }
         std::sort(track.clips.begin(), track.clips.end(),
@@ -235,7 +265,13 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
     }
     std::sort(loaded.labels.begin(), loaded.labels.end(),
               [](const Label& a, const Label& b) { return a.startFrame < b.startFrame; });
+    if (loadedFiles != nullptr) {
+        *loadedFiles = std::move(files);
+    }
+    return true;
+}
 
+void ProjectFile::replace(Project& project, Project& loaded) {
     // Everything parsed and every clip read: only now replace the target.
     std::lock_guard<std::mutex> lock(project.mutex);
     if (loaded.channels != project.channels) {
@@ -249,7 +285,6 @@ bool ProjectFile::load(Project& project, const std::string& folderPath, std::str
     project.labels = std::move(loaded.labels);
     project.selection.clear();
     project.playheadFrame = 0;
-    return true;
 }
 
 } // namespace zrecord

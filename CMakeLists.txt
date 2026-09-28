@@ -71,6 +71,7 @@ add_library(zrecord_core STATIC
     src/Snap.cpp
     src/Commands.cpp
     src/ProjectFile.cpp
+    src/Recovery.cpp
     src/SampleBuffer.cpp
     src/PlaybackMixer.cpp
     src/Resampler.cpp
