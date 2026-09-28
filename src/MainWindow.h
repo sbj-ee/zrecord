@@ -138,6 +138,13 @@ public:
     // take files), writing the journal now instead of after the debounce,
     // and a simulated crash (the session is left behind, unlocked).
     RecoverySession* recoveryForTest() { return recovery_.get(); }
+    // Called once at launch (main.cpp): if an earlier run crashed and left
+    // unsaved work behind, offers to restore or discard it. True if
+    // something was restored.
+    bool offerRecovery();
+    // Replaces exec() of the recovery dialog: returns its result code.
+    using RecoveryDialogDriver = std::function<int(class RecoveryDialog&)>;
+    void setRecoveryDialogDriverForTest(RecoveryDialogDriver driver) { recoveryDriver_ = std::move(driver); }
     bool writeJournalNowForTest();
     void abandonRecoveryForTest();
     QString statusTextForTest() const;
@@ -323,6 +330,7 @@ private:
     bool journalDirty_ = false;
     QString shownJournalError_;
     QString takePath_; // the take being recorded (empty: none)
+    RecoveryDialogDriver recoveryDriver_;
 };
 
 } // namespace zrecord

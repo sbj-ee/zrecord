@@ -36,6 +36,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <algorithm>
+#include <QLocale>
 #include <cmath>
 
 #include "AudioEngine.h"
@@ -45,6 +46,7 @@
 #include "Commands.h"
 #include "ProjectFile.h"
 #include "Recovery.h"
+#include "RecoveryDialog.h"
 #include "Resampler.h"
 
 namespace zrecord {
@@ -187,6 +189,74 @@ void MainWindow::abandonRecoveryForTest() {
 
 QString MainWindow::statusTextForTest() const {
     return statusLabel_->text();
+}
+
+bool MainWindow::offerRecovery() {
+    if (!recovery_->active() || engine_->isRecording() || hasUnsavedChanges()) {
+        return false; // only into a fresh window
+    }
+    std::vector<std::unique_ptr<RecoverableSession>> sessions = RecoverableSession::find(RecoverySession::defaultRoot());
+    while (!sessions.empty()) {
+        std::vector<RecoveryDialog::Entry> entries;
+        for (const auto& session : sessions) {
+            entries.push_back({session->summary(), session->lastSaved()});
+        }
+        RecoveryDialog dialog(entries, this);
+        const int result = recoveryDriver_ ? recoveryDriver_(dialog) : dialog.exec();
+        const int index = std::clamp(dialog.selectedIndex(), 0, static_cast<int>(sessions.size()) - 1);
+        RecoverableSession& session = *sessions[static_cast<size_t>(index)];
+        const QString when = QLocale().toString(session.lastSaved(), QLocale::ShortFormat);
+        if (result == RecoveryDialog::Discard) {
+            session.discard();
+            sessions.erase(sessions.begin() + index);
+            statusLabel_->setText("Discarded the unsaved work from " + when);
+            continue; // any others are offered in turn
+        }
+        if (result != RecoveryDialog::Restore) {
+            return false; // Decide Later: all of them stay for next time
+        }
+
+        Project restored;
+        std::string error;
+        int64_t takeFrames = 0;
+        if (!session.restore(restored, error, &takeFrames)) {
+            QMessageBox::warning(this, "Recovery failed",
+                                 "The unsaved work couldn't be restored: " + QString::fromStdString(error) +
+                                     "\n\nIt has been kept, and will be offered again next time.");
+            return false;
+        }
+        stopPlaybackNow();
+        ProjectFile::replace(project_, restored);
+        undoStack_->clear();
+        trackPanel_->refresh();
+        trackPanel_->zoomToFit();
+        setControlsEnabled(false);
+        // Restored work is unsaved work: Save goes back to its project
+        // folder (if it had one that still exists), and quitting asks.
+        const QString path = session.projectPath();
+        projectPath_ = (!path.isEmpty() && QDir(path).exists()) ? path : QString();
+        settingsDirty_ = true;
+        updateWindowTitle();
+        // It's this session's to protect now: journal it here (a copy of its
+        // audio) before the old session and its files are removed.
+        resetRecovery(projectPath_, {});
+        writeJournal();
+        QString note = "Restored the unsaved work from " + when;
+        if (takeFrames > 0) {
+            note += QString(", including a partial take of %1 (labelled \"Recovered take\")")
+                        .arg(formatTakeLength(takeFrames, project_.sampleRate));
+        }
+        if (recovery_->flushJournal()) {
+            session.discard();
+            statusLabel_->setText(note + ". Save the project to keep it.");
+        } else {
+            // Keep the old session rather than leave the work unprotected.
+            statusLabel_->setText(note + ". Autosave failed (" + recovery_->lastJournalError() +
+                                  "), so the recovery data was kept. Save the project to keep it.");
+        }
+        return true;
+    }
+    return false;
 }
 
 void MainWindow::resetRecovery(const QString& projectPath, const ClipFileMap& files) {

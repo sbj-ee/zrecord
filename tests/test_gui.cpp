@@ -30,6 +30,7 @@
 #include <QMenu>
 #include "PeakMeter.h"
 #include "Recovery.h"
+#include "RecoveryDialog.h"
 #include "TakeFile.h"
 #include "zrecord_version.h"
 
@@ -116,6 +117,9 @@ private slots:
     void takesStreamToTheSessionAndTheJournalFollows();
     void diskFullStopsTheTakeKeepsItAndSaysSo();
     void saveAndCleanExitRemoveTheRecoveryData();
+    void recoveryDialogRestoresACrashedSession();
+    void recoveryDialogDiscardsACrashedSession();
+    void recoveryDialogDecideLaterKeepsIt();
 
 private:
     Project project_;
@@ -2129,6 +2133,125 @@ void TestGui::saveAndCleanExitRemoveTheRecoveryData() {
     QVERIFY2(ProjectFile::load(reloaded, path.toStdString(), message), message.c_str());
     QCOMPARE(reloaded.tracks[0].clips.size(), size_t(1));
     QVERIFY(QDir(RecoverySession::defaultRoot()).entryList({"session-*"}, QDir::Dirs).isEmpty());
+}
+
+namespace {
+// What a crash mid-take leaves: a journal of a one-track stereo project,
+// recording.json, and the partial take that was streaming onto that track.
+struct CrashedSession {
+    QString dir;
+    QString takePath;
+    std::vector<float> journalled;
+    std::vector<float> take;
+};
+
+CrashedSession makeCrashedSession() {
+    CrashedSession crashed;
+    RecoverySession session(RecoverySession::defaultRoot());
+    if (!session.begin()) return crashed;
+    Project project;
+    project.channels = 2;
+    project.sampleRate = 44100.0;
+    Track track;
+    track.name = "Vocals";
+    Clip clip;
+    clip.channels = 2;
+    crashed.journalled = rampTake(4410, 2);
+    clip.samples = SampleBuffer(crashed.journalled);
+    track.clips.push_back(clip);
+    project.tracks.push_back(track);
+    session.scheduleJournal(project);
+    session.flushJournal();
+    crashed.takePath = session.newTakePath();
+    session.beginTake({crashed.takePath, 0, 4410, 2});
+    crashed.take = rampTake(44100 * 3 / 2, 2);
+    // (A take file cut off by a real kill is covered by test_takefile and
+    // test_recovery; here it only has to be there.)
+    FloatWavAppender file;
+    std::string error;
+    file.open(crashed.takePath.toStdString(), 2, 44100, error);
+    file.append(crashed.take.data(), 44100 * 3 / 2);
+    file.close();
+    crashed.dir = session.dir();
+    session.abandonForTesting();
+    return crashed;
+}
+} // namespace
+
+void TestGui::recoveryDialogRestoresACrashedSession() {
+    const CrashedSession crashed = makeCrashedSession();
+    QVERIFY(QDir(crashed.dir).exists());
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    int shown = 0;
+    window.setRecoveryDialogDriverForTest([&](RecoveryDialog& dialog) {
+        ++shown;
+        auto* list = dialog.findChild<QListWidget*>("recoverySessions");
+        if (list == nullptr || list->count() != 1) return int(RecoveryDialog::Later);
+        const QString text = list->item(0)->text();
+        if (!text.startsWith("Untitled project, 1 track, 1 clip, and a partial take of 0:01")) return -1;
+        dialog.findChild<QPushButton*>("restoreButton")->click();
+        return dialog.result();
+    });
+    QVERIFY(window.offerRecovery());
+    QCOMPARE(shown, 1);
+
+    // The journal plus the partial take, where it was being recorded.
+    const Project& project = window.projectForTest();
+    QCOMPARE(project.tracks.size(), size_t(1));
+    QCOMPARE(project.tracks[0].name, std::string("Vocals"));
+    QCOMPARE(project.tracks[0].clips.size(), size_t(2));
+    QVERIFY(project.tracks[0].clips[0].samples == crashed.journalled);
+    QCOMPARE(project.tracks[0].clips[1].startFrame, int64_t(4410));
+    QVERIFY(project.tracks[0].clips[1].samples == crashed.take);
+    QCOMPARE(project.labels.size(), size_t(1));
+    QCOMPARE(project.labels[0].text, std::string("Recovered take"));
+    // It's unsaved work (with no undo history) and says so.
+    QVERIFY(window.hasUnsavedChanges());
+    QVERIFY(!findAction(window, "Undo")->isEnabled());
+    QVERIFY2(window.statusTextForTest().startsWith("Restored the unsaved work from ") &&
+                 window.statusTextForTest().contains("including a partial take of 1.5 s") &&
+                 window.statusTextForTest().endsWith("Save the project to keep it."),
+             qPrintable(window.statusTextForTest()));
+    // This window's session protects it now; the crashed one is gone.
+    QVERIFY(!QDir(crashed.dir).exists());
+    QVERIFY(QFile::exists(QDir(window.recoveryForTest()->dir()).filePath("journal.json")));
+    QVERIFY(RecoverableSession::find(RecoverySession::defaultRoot()).empty());
+    // Nothing more to offer.
+    QVERIFY(!window.offerRecovery());
+    QCOMPARE(shown, 1);
+}
+
+void TestGui::recoveryDialogDiscardsACrashedSession() {
+    const CrashedSession crashed = makeCrashedSession();
+    MainWindow window(std::make_unique<FakeAudioEngine>());
+    window.setRecoveryDialogDriverForTest([](RecoveryDialog& dialog) {
+        dialog.findChild<QPushButton*>("discardButton")->click();
+        return dialog.result();
+    });
+    QVERIFY(!window.offerRecovery());
+    QVERIFY(window.projectForTest().tracks.empty());
+    QVERIFY(!window.hasUnsavedChanges());
+    QVERIFY(!QDir(crashed.dir).exists());
+    QVERIFY(!QFile::exists(crashed.takePath));
+    QVERIFY(window.statusTextForTest().startsWith("Discarded the unsaved work from "));
+    QVERIFY(RecoverableSession::find(RecoverySession::defaultRoot()).empty());
+}
+
+void TestGui::recoveryDialogDecideLaterKeepsIt() {
+    const CrashedSession crashed = makeCrashedSession();
+    {
+        MainWindow window(std::make_unique<FakeAudioEngine>());
+        window.setRecoveryDialogDriverForTest([](RecoveryDialog& dialog) {
+            dialog.findChild<QPushButton*>("laterButton")->click();
+            return dialog.result();
+        });
+        QVERIFY(!window.offerRecovery());
+        QVERIFY(window.projectForTest().tracks.empty());
+    }
+    QVERIFY(QDir(crashed.dir).exists()); // offered again next time
+    auto found = RecoverableSession::find(RecoverySession::defaultRoot());
+    QCOMPARE(found.size(), size_t(1));
+    found[0]->discard();
 }
 
 #include "test_gui.moc"
