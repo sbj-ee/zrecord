@@ -106,7 +106,7 @@ private:
 
 // Real-time pitch shifter using a two-tap, Hann-crossfaded delay line (no
 // FFT). Works at a fixed output rate of one sample per input sample, so it
-// fits directly into a per-sample filter chain without altering block sizes.
+// fits directly into a per-sample effect stack without altering block sizes.
 class PitchShifter {
 public:
     void configure(double pitchRatio);
@@ -135,71 +135,6 @@ public:
 private:
     double driveAmount_ = 6.0;
     double normalizer_ = 0.99998771; // tanh(6)
-};
-
-enum class VoiceEffect { None, Robot, Echo, DeepVoice, Chipmunk, Distortion };
-
-struct FilterSettings {
-    bool limiterEnabled = false;
-    double limiterCeilingDb = -1.0;
-
-    bool gainEnabled = false;
-    double gainDb = 0.0;
-
-    bool highPassEnabled = false;
-    double highPassHz = 100.0;
-
-    bool lowPassEnabled = false;
-    double lowPassHz = 8000.0;
-
-    bool noiseGateEnabled = false;
-    double noiseGateThresholdDb = -40.0;
-    double noiseGateAttackMs = 5.0;
-    double noiseGateReleaseMs = 80.0;
-
-    bool compressorEnabled = false;
-    double compressorThresholdDb = -20.0;
-    double compressorRatio = 3.0;
-
-    VoiceEffect voiceEffect = VoiceEffect::None;
-};
-
-// Applies the configured chain, in this order:
-//   gain -> high-pass -> low-pass -> noise gate -> compressor -> voice effect
-//   -> limiter
-// to interleaved multi-channel float buffers. The limiter is last so it
-// really does cap the output. Each channel gets independent filter state.
-class FilterChain {
-public:
-    // Sizes and allocates everything and resets all state. Not real-time
-    // safe: call it before the stream starts.
-    void prepare(double sampleRate, int channels);
-    // Real-time safe once prepared: updates coefficients in place without
-    // allocating and keeps each stage's state (a stage being switched on
-    // starts from rest). The stages' configure() likewise never resets.
-    void setSettings(const FilterSettings& settings);
-    FilterSettings settings() const;
-
-    // Processes interleaved samples in place. frameCount * channels_ must
-    // equal interleaved.size().
-    void process(std::vector<float>& interleaved, size_t frameCount);
-
-private:
-    double sampleRate_ = 44100.0;
-    int channels_ = 1;
-    FilterSettings settings_;
-
-    std::vector<Limiter> limiter_;
-    std::vector<Biquad> highPass_;
-    std::vector<Biquad> lowPass_;
-    std::vector<NoiseGate> noiseGate_;
-    std::vector<Compressor> compressor_;
-    std::vector<RingModulator> ringMod_;
-    std::vector<EchoEffect> echo_;
-    std::vector<PitchShifter> pitchShifter_;
-    std::vector<Distortion> distortion_;
-
-    void applyParameters(); // coefficients only: no allocation, state kept
 };
 
 enum class FadeShape { In, Out };

@@ -7,7 +7,6 @@
 
 #include "AudioEngine.h"
 #include "Capture.h"
-#include "Filters.h"
 #include "Meter.h"
 
 using namespace zrecord;
@@ -37,7 +36,7 @@ float peakOf(const std::vector<float>& v) {
 
 } // namespace
 
-// The capture path: input gain, then the live filter chain, then the take.
+// The capture path: input gain (the only processing), then the take.
 // Unit tests drive the per-block function the audio callback uses; the end
 // to end tests run the real PortAudio engine on an ALSA device that plays a
 // known sine from a file (skipped where ALSA can't be set up that way).
@@ -50,7 +49,7 @@ private slots:
     void unityGainAtDefaults();
     void inputGainScalesExactly();
     void inputGainIsClamped();
-    void meterPeakFollowsTheFilterChain();
+    void meterPeakFollowsTheInputGain();
     void int16FullScaleDoesNotOverflow();
     void singleFullScalePeakIsNotAClip();
     void clipRunCarriesAcrossBuffers();
@@ -64,6 +63,7 @@ private slots:
     void realEngineFlagsAFullScaleInput();
     void realEngineCleanFullScaleSineIsNotAClip();
     void realEngineMeterShowsTheRecordedLevel();
+    void realEngineTakeIsTheRawInputBitExact();
     void realEngineMeterBlocksCarryRmsAndEveryFrame();
     void realEngineInjectedOverflowIsPaddedInPlace();
     void realEngineRingOverrunIsPaddedInPlace();
@@ -123,16 +123,14 @@ void TestCapture::unityGainAtDefaults_data() {
 }
 
 void TestCapture::unityGainAtDefaults() {
-    // 0 dB input gain and the default (all off) chain must record exactly
-    // what arrives: peak in == peak out, sample for sample, nothing scaled.
+    // 0 dB input gain must record exactly what arrives (there is no other
+    // processing on the capture path): peak in == peak out, sample for sample, nothing scaled.
     QFETCH(double, db);
     QFETCH(int, channels);
-    FilterChain chain;
-    chain.prepare(kRate, channels);
     const std::vector<float> in = sine(dbfs(db), 4410, channels);
     std::vector<float> block = in;
     const CapturePeaks peaks =
-        processCaptureBlock(block, in.size() / size_t(channels), channels, float(inputGainToLinear(0.0)), chain);
+        processCaptureBlock(block, in.size() / size_t(channels), channels, float(inputGainToLinear(0.0)));
     QVERIFY(block == in);
     QCOMPARE(peaks.input, peakOf(in));
     QCOMPARE(peaks.recorded, peakOf(in));
@@ -141,12 +139,10 @@ void TestCapture::unityGainAtDefaults() {
 }
 
 void TestCapture::inputGainScalesExactly() {
-    FilterChain chain;
-    chain.prepare(kRate, 2);
     const std::vector<float> in = sine(dbfs(-12.0), 4410, 2);
     for (double gainDb : {-12.0, -6.0, 6.0, 12.0}) {
         std::vector<float> block = in;
-        const CapturePeaks peaks = processCaptureBlock(block, 4410, 2, float(inputGainToLinear(gainDb)), chain);
+        const CapturePeaks peaks = processCaptureBlock(block, 4410, 2, float(inputGainToLinear(gainDb)));
         QCOMPARE(peaks.input, peakOf(in)); // measured before the gain
         QVERIFY2(std::fabs(20.0 * std::log10(peaks.recorded) - (-12.0 + gainDb)) < 0.01,
                  qPrintable(QString("%1 dB gain gave %2 dBFS").arg(gainDb).arg(20.0 * std::log10(peaks.recorded))));
@@ -160,18 +156,14 @@ void TestCapture::inputGainIsClamped() {
     QVERIFY(std::fabs(inputGainToLinear(-100.0) - std::pow(10.0, kInputGainMinDb / 20.0)) < 1e-12);
 }
 
-void TestCapture::meterPeakFollowsTheFilterChain() {
-    // Regression: the meter measured the raw input, before the chain, so a
-    // +12 dB Gain stage recorded a -6 dBFS input at +6 dBFS while the meter
-    // read -6 and CLIP stayed dark.
-    FilterChain chain;
-    chain.prepare(kRate, 2);
-    FilterSettings settings;
-    settings.gainEnabled = true;
-    settings.gainDb = 12.0;
-    chain.setSettings(settings);
+void TestCapture::meterPeakFollowsTheInputGain() {
+    // Regression: the meter measured the raw input, before the gain, so +12 dB
+    // recorded a -6 dBFS input at +6 dBFS while the meter read -6 and CLIP
+    // stayed dark. (This used the capture-side Gain effect, which no longer
+    // exists: effects are per-track playback now, and input gain is the one
+    // gain on the way in.)
     std::vector<float> block = sine(dbfs(-6.0), 4410, 2);
-    const CapturePeaks peaks = processCaptureBlock(block, 4410, 2, 1.0f, chain);
+    const CapturePeaks peaks = processCaptureBlock(block, 4410, 2, float(inputGainToLinear(12.0)));
     QVERIFY(std::fabs(20.0 * std::log10(peaks.input) - -6.0) < 0.01);
     QVERIFY(std::fabs(20.0 * std::log10(peaks.recorded) - 6.0) < 0.01);
     QCOMPARE(peaks.recorded, peakOf(block));
@@ -182,9 +174,7 @@ void TestCapture::int16FullScaleDoesNotOverflow() {
     // (x / 32768), stays within +/-1 and counts as input clipping.
     std::vector<float> block;
     for (int v : {32767, -32768, 16384, -16384, 0}) block.push_back(float(v) / 32768.0f);
-    FilterChain chain;
-    chain.prepare(kRate, 1);
-    const CapturePeaks peaks = processCaptureBlock(block, block.size(), 1, 1.0f, chain);
+    const CapturePeaks peaks = processCaptureBlock(block, block.size(), 1, 1.0f);
     QCOMPARE(peaks.recorded, 1.0f);
     QVERIFY(peakOf(block) <= 1.0f);
     QVERIFY(isFullScale(block[0]) && isFullScale(block[1]));
@@ -317,13 +307,11 @@ void TestCapture::captureBlockChecksTheRawInputForClips() {
     // all the way down: the clipping happened before zrecord.
     std::vector<float> in = sine(dbfs(6.0), 4410, 2);
     for (float& v : in) v = std::clamp(v, -1.0f, 1.0f);
-    FilterChain chain;
-    chain.prepare(kRate, 2);
     ClipDetector d;
     d.reset(2);
     std::vector<float> block = in;
     const CapturePeaks peaks =
-        processCaptureBlock(block, 4410, 2, float(inputGainToLinear(kInputGainMinDb)), chain, &d);
+        processCaptureBlock(block, 4410, 2, float(inputGainToLinear(kInputGainMinDb)), &d);
     // 440 Hz for 0.1 s is 44 cycles: 88 half-cycles, each flattened at the
     // top or bottom, in both channels (the sine starts and ends at 0, so no
     // run is cut off at the edges).
@@ -334,10 +322,10 @@ void TestCapture::captureBlockChecksTheRawInputForClips() {
     // Without a detector nothing is counted, and a clean -6 dBFS sine has
     // no clips at all.
     block = in;
-    QCOMPARE(processCaptureBlock(block, 4410, 2, 1.0f, chain).inputClipEvents, int64_t(0));
+    QCOMPARE(processCaptureBlock(block, 4410, 2, 1.0f).inputClipEvents, int64_t(0));
     d.reset(2);
     block = sine(dbfs(-6.0), 4410, 2);
-    QCOMPARE(processCaptureBlock(block, 4410, 2, 1.0f, chain, &d).inputClipEvents, int64_t(0));
+    QCOMPARE(processCaptureBlock(block, 4410, 2, 1.0f, &d).inputClipEvents, int64_t(0));
 }
 
 void TestCapture::peakCacheFlagsClippedBlocks() {
@@ -536,18 +524,14 @@ void TestCapture::realEngineCleanFullScaleSineIsNotAClip() {
 }
 
 void TestCapture::realEngineMeterShowsTheRecordedLevel() {
-    // The reported bug's mechanism, end to end: +12 dB from the Gain filter
-    // records a -6 dBFS input at +6 dBFS. The meter used to read -6 (the raw
-    // input) with CLIP dark; it must read what was recorded.
-    FilterSettings settings;
-    settings.gainEnabled = true;
-    settings.gainDb = 12.0;
-    engine_->setFilterSettings(settings);
-    engine_->setInputGainDb(0.0);
+    // The reported bug's mechanism, end to end: +12 dB of gain records a
+    // -6 dBFS input at +6 dBFS. The meter used to read -6 (the raw input) with
+    // CLIP dark; it must read what was recorded.
+    engine_->setInputGainDb(12.0);
     std::vector<float> take;
     float meter = 0.0f, input = 0.0f;
     const bool ok = captureFromFile(s16Sine(-6.0, size_t(3 * kRate)), take, meter, input);
-    engine_->setFilterSettings(FilterSettings{});
+    engine_->setInputGainDb(0.0);
     if (!ok) {
         QSKIP("ALSA file/null capture device unavailable");
     }
@@ -555,6 +539,54 @@ void TestCapture::realEngineMeterShowsTheRecordedLevel() {
     QCOMPARE(meter, peakOf(take));
     QVERIFY(meter > 1.0f); // i.e. the meter's CLIP light comes on
     QVERIFY(std::fabs(20.0 * std::log10(input) - -6.0) < 0.02);
+}
+
+void TestCapture::realEngineTakeIsTheRawInputBitExact() {
+    // Nothing but the input gain touches a take: at 0 dB it is the device's
+    // samples exactly, as the S16 -> float conversion delivered them (x/32768).
+    // Effects live on tracks and are applied on playback, never recorded.
+    engine_->setInputGainDb(0.0);
+    std::vector<int16_t> in(size_t(2 * kRate) * 2);
+    uint32_t seed = 12345;
+    for (int16_t& v : in) { // noise, so any processing or offset shows
+        seed = seed * 1664525u + 1013904223u;
+        v = static_cast<int16_t>(int32_t(seed >> 16) - 32768) / 2;
+    }
+    std::vector<float> take;
+    float meter = 0.0f, input = 0.0f;
+    if (!captureFromFile(in, take, meter, input)) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    // The clock-less null device sometimes skips ahead in the input file
+    // (whole ALSA periods, before zrecord sees anything), so the take is
+    // checked as runs of the input, in order: every sample must equal the
+    // input sample it continues from, exactly. Any processing -- a filter, a
+    // gain, an effect -- would change the values and break the runs.
+    auto value = [&](size_t j) { return float(in[j]) / 32768.0f; };
+    size_t j = 0, matched = 0, skips = 0;
+    for (size_t i = 0; i < take.size() && j < in.size(); ++i, ++j) {
+        if (take[i] == value(j)) {
+            ++matched;
+            continue;
+        }
+        // A skip: find where this run of the take continues in the input
+        // (same channel, 16 samples in a row).
+        size_t k = j + 1;
+        for (; k + 16 <= in.size(); ++k) {
+            if ((k - j) % 2 != 0) continue;
+            bool run = i + 16 <= take.size();
+            for (size_t m = 0; run && m < 16; ++m) run = take[i + m] == value(k + m);
+            if (run) break;
+        }
+        if (k + 16 > in.size()) {
+            QFAIL(qPrintable(QString("take sample %1 (%2) isn't the input's").arg(i).arg(take[i])));
+        }
+        ++skips;
+        j = k;
+        ++matched;
+    }
+    QVERIFY2(matched >= size_t(kRate), qPrintable(QString("only %1 samples matched").arg(matched)));
+    qInfo("%zu input samples matched exactly (%zu device-side skips)", matched, skips);
 }
 
 void TestCapture::realEngineMeterBlocksCarryRmsAndEveryFrame() {

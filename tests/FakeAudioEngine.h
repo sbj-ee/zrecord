@@ -64,8 +64,6 @@ public:
     int64_t lastSeek() const { return lastSeek_; }
     int refreshCalls() const { return refreshCalls_; }
 
-    void setFilterSettings(const FilterSettings& settings) override { settings_ = settings; }
-    FilterSettings settings() const { return settings_; }
 
     void setInputGainDb(double db) override { inputGainDb_ = db; }
     double inputGainDb() const override { return inputGainDb_; }
@@ -119,7 +117,6 @@ private:
     int64_t lastSeek_ = -1;
     std::vector<MeterBlock> meterBlocks_;
     double inputGainDb_ = 0.0;
-    FilterSettings settings_;
     std::vector<float> captured_;
 };
 

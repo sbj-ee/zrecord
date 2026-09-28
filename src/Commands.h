@@ -68,27 +68,6 @@ private:
     int64_t endFrame_;
 };
 
-// Runs a selection through a FilterChain configured with `settings` and
-// writes the result back in place (same length, same clip boundaries). The
-// chain starts from a clean state, so attack/release-style filters (noise
-// gate, compressor, limiter) don't carry over context from audio before the
-// selection -- a known limitation of applying an effect to an isolated span.
-class ApplyEffectCommand : public TrackEditCommand {
-public:
-    ApplyEffectCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,
-                        const FilterSettings& settings, double sampleRate, int channels);
-
-protected:
-    void apply() override;
-
-private:
-    int64_t startFrame_;
-    int64_t endFrame_;
-    FilterSettings settings_;
-    double sampleRate_;
-    int channels_;
-};
-
 // Replaces a track's effect stack (add, remove, reorder, bypass or change
 // parameters: whatever the effects dialog did) as one undoable step.
 class SetTrackEffectsCommand : public QUndoCommand {
@@ -120,8 +99,7 @@ protected:
 };
 
 // Ramps the selection from silence to unity, or unity to silence, in place.
-// Same read-process-write shape as ApplyEffectCommand, but the ramp is
-// positioned across the selection rather than driven by the filter panel.
+// A read-process-write edit of the selection, the ramp positioned across it.
 class FadeCommand : public TrackEditCommand {
 public:
     FadeCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,

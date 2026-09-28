@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "AudioEngineInterface.h"
+#include "AudioFileWriter.h"
 #include "Project.h"
 #include "TrackPanel.h"
 #include "VoiceChanger.h"
@@ -15,7 +16,6 @@ class QPushButton;
 class QToolButton;
 class QLabel;
 class QMenu;
-class QCheckBox;
 class QDoubleSpinBox;
 class QSlider;
 class QTimer;
@@ -36,7 +36,6 @@ private slots:
     void onToggleRecord();
     void onTogglePlayback();
     void onExport();
-    void onFiltersChanged();
     void onTick();
     void onSeekRequested(int64_t frame);
     void refreshDevices();
@@ -62,7 +61,7 @@ private slots:
     void onEditTrackEffects(int trackIndex);
     void onAbout();
     void onCrossfade();
-    void onApplyEffect();
+    void onApplyTrackEffects();
     void onSelectAll();
     void onEnvelopeEdited(int trackIndex, const std::vector<EnvelopePoint>& before,
                           const std::vector<EnvelopePoint>& after, const QString& what);
@@ -91,6 +90,11 @@ public:
     // Saves to a .zrproj folder and marks the project saved (what File > Save
     // and Save As do once they have a path).
     bool saveProjectTo(const QString& path, QString* error = nullptr);
+
+    // Renders the mixdown -- every track through its effect stack, gain and
+    // envelope -- and writes it (what Export Mixdown does once it has a path).
+    // False with `error` set if there's nothing to export or writing failed.
+    bool exportMixdownTo(const QString& path, AudioFormat format, std::string* error = nullptr);
 
     // File > Open Recent: the most recently opened or saved project folders,
     // newest first, kept in QSettings. Opening one asks about unsaved
@@ -137,8 +141,9 @@ private:
     // Menus reuse the same QActions the toolbar shows, so the two can't drift
     // apart and the menu advertises each shortcut for free.
     void buildMenus();
-    FilterSettings filterSettingsFromUi() const;
-    void applyFilterSettingsFromUi();
+    // The track Track Effects... and Apply Track Effects act on: the
+    // selection's track, else the armed one, else the only one (-1: none).
+    int effectsTargetTrack() const;
     void setControlsEnabled(bool recording);
     void queryInitialMicVolume();
     int findArmedTrackIndex() const;
@@ -210,7 +215,7 @@ private:
 
     QSlider* micVolumeSlider_ = nullptr;
     QLabel* micVolumeValueLabel_ = nullptr;
-    // Digital input gain (dB, default 0), applied before the filter chain and
+    // Digital input gain (dB, default 0), the only processing on a take, and
     // kept in QSettings: it belongs to the input setup, not to a project.
     QDoubleSpinBox* inputGainSpin_ = nullptr;
     // Latching "the input itself clipped" light: the raw signal reached full
@@ -273,7 +278,8 @@ private:
     QAction* backOneSecondAction_ = nullptr;
     QAction* forwardOneSecondAction_ = nullptr;
     QAction* exportAction_ = nullptr;
-    QAction* applyEffectAction_ = nullptr;
+    QAction* trackEffectsAction_ = nullptr;
+    QAction* applyTrackEffectsAction_ = nullptr;
     QAction* quitAction_ = nullptr;
     QAction* selectAllAction_ = nullptr;
 
@@ -289,39 +295,6 @@ private:
     std::vector<MeterBlock> meterBlocks_; // reused every tick
     QLabel* statusLabel_ = nullptr;
     TrackPanel* trackPanel_ = nullptr;
-
-    QCheckBox* limiterEnable_ = nullptr;
-    QSlider* limiterCeilingSlider_ = nullptr;
-    QLabel* limiterCeilingValueLabel_ = nullptr;
-
-    QCheckBox* gainEnable_ = nullptr;
-    QSlider* gainSlider_ = nullptr;
-    QLabel* gainValueLabel_ = nullptr;
-
-    QCheckBox* highPassEnable_ = nullptr;
-    QSlider* highPassSlider_ = nullptr;
-    QLabel* highPassValueLabel_ = nullptr;
-
-    QCheckBox* lowPassEnable_ = nullptr;
-    QSlider* lowPassSlider_ = nullptr;
-    QLabel* lowPassValueLabel_ = nullptr;
-
-    QCheckBox* noiseGateEnable_ = nullptr;
-    QSlider* noiseGateSlider_ = nullptr;
-    QLabel* noiseGateValueLabel_ = nullptr;
-    QSlider* noiseGateAttackSlider_ = nullptr;
-    QLabel* noiseGateAttackValueLabel_ = nullptr;
-    QSlider* noiseGateReleaseSlider_ = nullptr;
-    QLabel* noiseGateReleaseValueLabel_ = nullptr;
-
-    QCheckBox* compressorEnable_ = nullptr;
-    QSlider* compressorThresholdSlider_ = nullptr;
-    QLabel* compressorThresholdValueLabel_ = nullptr;
-    QSlider* compressorRatioSlider_ = nullptr;
-    QLabel* compressorRatioValueLabel_ = nullptr;
-
-    QComboBox* voiceEffectCombo_ = nullptr;
-    QPushButton* applyEffectButton_ = nullptr;
 
     QTimer* timer_ = nullptr;
 };

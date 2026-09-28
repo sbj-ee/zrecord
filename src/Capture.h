@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "Filters.h"
 
 namespace zrecord {
 
@@ -73,13 +72,14 @@ struct CapturePeaks {
     int64_t inputClipEvents = 0; // new clips in the raw input (needs a detector)
 };
 
-// The per-block work of the capture callback: applies the input gain, then
-// the live filter chain, to the first frameCount frames of `block` in place.
-// Returns the peaks before and after, so the level meter can show what is
-// actually recorded (it used to show the raw input, missing any gain or
-// effect the chain added). With a detector, the raw input (before any gain)
-// is also checked for clipping. Real-time safe: no allocation, no locks.
+// The per-block work of the capture callback: applies the input gain -- and
+// nothing else -- to the first frameCount frames of `block` in place. The
+// take is the raw input; effects are a track's playback stack, applied when
+// it's heard or exported, never recorded. Returns the peaks before and after
+// the gain, so the level meter shows what is actually recorded. With a
+// detector, the raw input (before any gain) is also checked for clipping.
+// Real-time safe: no allocation, no locks.
 CapturePeaks processCaptureBlock(std::vector<float>& block, size_t frameCount, int channels, float inputGain,
-                                 FilterChain& chain, ClipDetector* inputClip = nullptr);
+                                 ClipDetector* inputClip = nullptr);
 
 } // namespace zrecord

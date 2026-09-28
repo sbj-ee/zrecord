@@ -12,16 +12,13 @@
 #include <QActionGroup>
 #include <QCloseEvent>
 #include <QFileInfo>
-#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QFontMetrics>
 #include <QKeySequence>
 #include <QFileDialog>
-#include <QGridLayout>
 #include <QInputDialog>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -72,7 +69,6 @@ MainWindow::MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* pa
     undoStack_ = new QUndoStack(this);
     buildUi();
     refreshDevices();
-    applyFilterSettingsFromUi();
     setControlsEnabled(false);
     queryInitialMicVolume();
     onSelectionChanged();
@@ -85,6 +81,7 @@ MainWindow::MainWindow(std::unique_ptr<AudioEngineInterface> engine, QWidget* pa
     connect(trackPanel_, &TrackPanel::effectsRequested, this, &MainWindow::onEditTrackEffects);
     connect(trackPanel_, &TrackPanel::trackSettingsChanged, this, [this] {
         settingsDirty_ = true;
+        onSelectionChanged(); // arming a track can change what Ctrl+R applies to
         updateWindowTitle();
     });
     updateWindowTitle();
@@ -151,8 +148,9 @@ void MainWindow::buildUi() {
     inputGainSpin_->setDecimals(1);
     inputGainSpin_->setSingleStep(0.5);
     inputGainSpin_->setSuffix(" dB");
-    inputGainSpin_->setToolTip("Digital gain on the recorded signal, before the filters. 0 dB records exactly "
-                               "what the input delivers. The level meter shows the result.");
+    inputGainSpin_->setToolTip("Digital gain on the recorded signal -- the only processing a take gets "
+                               "(track effects are applied on playback). 0 dB records exactly what the "
+                               "input delivers. The level meter shows the result.");
     inputGainSpin_->setValue(QSettings().value(kInputGainKey, 0.0).toDouble());
     micRow->addWidget(inputGainSpin_);
     engine_->setInputGainDb(inputGainSpin_->value());
@@ -319,6 +317,22 @@ void MainWindow::buildUi() {
     voiceChangerAction_->setStatusTip("Shift the pitch and formants of the selection or selected clips "
                                       "(length unchanged), with a preview");
     connect(voiceChangerAction_, &QAction::triggered, this, &MainWindow::onVoiceChanger);
+    // Ctrl+R (Audacity's "apply" muscle memory) now bakes a track's effect
+    // stack into its audio: the recorded take is raw and the effects are
+    // heard on playback until then.
+    trackEffectsAction_ = new QAction("Track Effects...", this);
+    trackEffectsAction_->setStatusTip("Edit the effect stack of the selected (or armed) track, applied on playback");
+    connect(trackEffectsAction_, &QAction::triggered, this, [this] {
+        const int track = effectsTargetTrack();
+        if (track >= 0) {
+            onEditTrackEffects(track);
+        }
+    });
+    applyTrackEffectsAction_ = new QAction("Apply Track Effects", this);
+    applyTrackEffectsAction_->setShortcut(QKeySequence("Ctrl+R"));
+    applyTrackEffectsAction_->setStatusTip("Render the selected (or armed) track's effects into its audio and "
+                                           "clear the stack, as one undo step");
+    connect(applyTrackEffectsAction_, &QAction::triggered, this, &MainWindow::onApplyTrackEffects);
     connect(crossfadeAction_, &QAction::triggered, this, &MainWindow::onCrossfade);
     connect(undoAction_, &QAction::triggered, undoStack_, &QUndoStack::undo);
     connect(redoAction_, &QAction::triggered, undoStack_, &QUndoStack::redo);
@@ -468,131 +482,6 @@ void MainWindow::buildUi() {
 
     rootLayout->addLayout(secondaryRow);
 
-    // Filters panel: applied live to the armed track's input while recording.
-    auto* filterGroup = new QGroupBox("Filters (live while recording, or apply to selection)");
-    auto* grid = new QGridLayout(filterGroup);
-
-    limiterEnable_ = new QCheckBox("Limiter (prevent clipping)");
-    limiterCeilingSlider_ = new QSlider(Qt::Horizontal);
-    limiterCeilingSlider_->setRange(-12, 0);
-    limiterCeilingSlider_->setValue(-1);
-    limiterCeilingValueLabel_ = new QLabel("-1 dB");
-
-    gainEnable_ = new QCheckBox("Gain");
-    gainSlider_ = new QSlider(Qt::Horizontal);
-    gainSlider_->setRange(-24, 24);
-    gainSlider_->setValue(0);
-    gainValueLabel_ = new QLabel("0 dB");
-    grid->addWidget(gainEnable_, 1, 0);
-    grid->addWidget(gainSlider_, 1, 1);
-    grid->addWidget(gainValueLabel_, 1, 2);
-
-    highPassEnable_ = new QCheckBox("High-pass");
-    highPassSlider_ = new QSlider(Qt::Horizontal);
-    highPassSlider_->setRange(20, 2000);
-    highPassSlider_->setValue(100);
-    highPassValueLabel_ = new QLabel("100 Hz");
-    grid->addWidget(highPassEnable_, 2, 0);
-    grid->addWidget(highPassSlider_, 2, 1);
-    grid->addWidget(highPassValueLabel_, 2, 2);
-
-    lowPassEnable_ = new QCheckBox("Low-pass");
-    lowPassSlider_ = new QSlider(Qt::Horizontal);
-    lowPassSlider_->setRange(200, 20000);
-    lowPassSlider_->setValue(8000);
-    lowPassValueLabel_ = new QLabel("8000 Hz");
-    grid->addWidget(lowPassEnable_, 3, 0);
-    grid->addWidget(lowPassSlider_, 3, 1);
-    grid->addWidget(lowPassValueLabel_, 3, 2);
-
-    noiseGateEnable_ = new QCheckBox("Noise gate");
-    noiseGateSlider_ = new QSlider(Qt::Horizontal);
-    noiseGateSlider_->setRange(-80, 0);
-    noiseGateSlider_->setValue(-40);
-    noiseGateValueLabel_ = new QLabel("-40 dB");
-    grid->addWidget(noiseGateEnable_, 4, 0);
-    grid->addWidget(noiseGateSlider_, 4, 1);
-    grid->addWidget(noiseGateValueLabel_, 4, 2);
-
-    noiseGateAttackSlider_ = new QSlider(Qt::Horizontal);
-    noiseGateAttackSlider_->setRange(1, 200);
-    noiseGateAttackSlider_->setValue(5);
-    noiseGateAttackValueLabel_ = new QLabel("5 ms");
-    grid->addWidget(new QLabel("  Attack"), 5, 0);
-    grid->addWidget(noiseGateAttackSlider_, 5, 1);
-    grid->addWidget(noiseGateAttackValueLabel_, 5, 2);
-
-    noiseGateReleaseSlider_ = new QSlider(Qt::Horizontal);
-    noiseGateReleaseSlider_->setRange(10, 1000);
-    noiseGateReleaseSlider_->setValue(80);
-    noiseGateReleaseValueLabel_ = new QLabel("80 ms");
-    grid->addWidget(new QLabel("  Release"), 6, 0);
-    grid->addWidget(noiseGateReleaseSlider_, 6, 1);
-    grid->addWidget(noiseGateReleaseValueLabel_, 6, 2);
-
-    compressorEnable_ = new QCheckBox("Compressor");
-    compressorThresholdSlider_ = new QSlider(Qt::Horizontal);
-    compressorThresholdSlider_->setRange(-60, 0);
-    compressorThresholdSlider_->setValue(-20);
-    compressorThresholdValueLabel_ = new QLabel("-20 dB");
-    grid->addWidget(compressorEnable_, 7, 0);
-    grid->addWidget(compressorThresholdSlider_, 7, 1);
-    grid->addWidget(compressorThresholdValueLabel_, 7, 2);
-
-    compressorRatioSlider_ = new QSlider(Qt::Horizontal);
-    compressorRatioSlider_->setRange(1, 10);
-    compressorRatioSlider_->setValue(3);
-    compressorRatioValueLabel_ = new QLabel("3:1");
-    grid->addWidget(new QLabel("  Ratio"), 8, 0);
-    grid->addWidget(compressorRatioSlider_, 8, 1);
-    grid->addWidget(compressorRatioValueLabel_, 8, 2);
-
-    grid->addWidget(new QLabel("Voice effect"), 9, 0);
-    voiceEffectCombo_ = new QComboBox();
-    voiceEffectCombo_->addItem("None", static_cast<int>(VoiceEffect::None));
-    voiceEffectCombo_->addItem("Robot Voice", static_cast<int>(VoiceEffect::Robot));
-    voiceEffectCombo_->addItem("Echo", static_cast<int>(VoiceEffect::Echo));
-    voiceEffectCombo_->addItem("Deep Voice", static_cast<int>(VoiceEffect::DeepVoice));
-    voiceEffectCombo_->addItem("Chipmunk", static_cast<int>(VoiceEffect::Chipmunk));
-    voiceEffectCombo_->addItem("Distortion", static_cast<int>(VoiceEffect::Distortion));
-    grid->addWidget(voiceEffectCombo_, 9, 1, 1, 2);
-
-    // The limiter sits at the end of the chain (it caps whatever the stages
-    // above produce), so its row sits at the bottom of the panel too.
-    grid->addWidget(limiterEnable_, 10, 0);
-    grid->addWidget(limiterCeilingSlider_, 10, 1);
-    grid->addWidget(limiterCeilingValueLabel_, 10, 2);
-
-    applyEffectButton_ = new QPushButton("Apply to Selection");
-    applyEffectButton_->setFocusPolicy(Qt::NoFocus);
-    applyEffectButton_->setToolTip("Destructively apply these filter settings to the current selection (Ctrl+R)");
-    grid->addWidget(applyEffectButton_, 11, 0, 1, 3);
-    connect(applyEffectButton_, &QPushButton::clicked, this, &MainWindow::onApplyEffect);
-
-    // Ctrl+R mirrors Audacity's "repeat/apply last effect" muscle memory.
-    applyEffectAction_ = new QAction("Apply Filters to Selection", this);
-    applyEffectAction_->setShortcut(QKeySequence("Ctrl+R"));
-    connect(applyEffectAction_, &QAction::triggered, this, &MainWindow::onApplyEffect);
-
-    rootLayout->addWidget(filterGroup);
-
-    connect(limiterEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
-    connect(limiterCeilingSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(gainEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
-    connect(gainSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(highPassEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
-    connect(highPassSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(lowPassEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
-    connect(lowPassSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(noiseGateEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
-    connect(noiseGateSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(noiseGateAttackSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(noiseGateReleaseSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(compressorEnable_, &QCheckBox::toggled, this, &MainWindow::onFiltersChanged);
-    connect(compressorThresholdSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(compressorRatioSlider_, &QSlider::valueChanged, this, &MainWindow::onFiltersChanged);
-    connect(voiceEffectCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onFiltersChanged);
-
     setCentralWidget(central);
     buildMenus();
     resize(900, 820);
@@ -641,11 +530,13 @@ void MainWindow::buildMenus() {
     editMenu->addAction(normalizeAction_);
     editMenu->addAction(voiceChangerAction_);
     editMenu->addAction(crossfadeAction_);
-    editMenu->addAction(applyEffectAction_);
 
     QMenu* trackMenu = menuBar()->addMenu("&Tracks");
     trackMenu->addAction(addTrackAction_);
     trackMenu->addAction(removeTrackAction_);
+    trackMenu->addSeparator();
+    trackMenu->addAction(trackEffectsAction_);
+    trackMenu->addAction(applyTrackEffectsAction_);
     trackMenu->addSeparator();
     trackMenu->addAction(addLabelAction_);
 
@@ -793,46 +684,6 @@ void MainWindow::onInputDeviceChanged() {
     }
 }
 
-FilterSettings MainWindow::filterSettingsFromUi() const {
-    FilterSettings settings;
-    settings.limiterEnabled = limiterEnable_->isChecked();
-    settings.limiterCeilingDb = limiterCeilingSlider_->value();
-    settings.gainEnabled = gainEnable_->isChecked();
-    settings.gainDb = gainSlider_->value();
-    settings.highPassEnabled = highPassEnable_->isChecked();
-    settings.highPassHz = highPassSlider_->value();
-    settings.lowPassEnabled = lowPassEnable_->isChecked();
-    settings.lowPassHz = lowPassSlider_->value();
-    settings.noiseGateEnabled = noiseGateEnable_->isChecked();
-    settings.noiseGateThresholdDb = noiseGateSlider_->value();
-    settings.noiseGateAttackMs = noiseGateAttackSlider_->value();
-    settings.noiseGateReleaseMs = noiseGateReleaseSlider_->value();
-    settings.compressorEnabled = compressorEnable_->isChecked();
-    settings.compressorThresholdDb = compressorThresholdSlider_->value();
-    settings.compressorRatio = compressorRatioSlider_->value();
-    settings.voiceEffect = static_cast<VoiceEffect>(voiceEffectCombo_->currentData().toInt());
-    return settings;
-}
-
-void MainWindow::applyFilterSettingsFromUi() {
-    FilterSettings settings = filterSettingsFromUi();
-    engine_->setFilterSettings(settings);
-
-    limiterCeilingValueLabel_->setText(QString("%1 dB").arg(limiterCeilingSlider_->value()));
-    gainValueLabel_->setText(QString("%1 dB").arg(gainSlider_->value()));
-    highPassValueLabel_->setText(QString("%1 Hz").arg(highPassSlider_->value()));
-    lowPassValueLabel_->setText(QString("%1 Hz").arg(lowPassSlider_->value()));
-    noiseGateValueLabel_->setText(QString("%1 dB").arg(noiseGateSlider_->value()));
-    noiseGateAttackValueLabel_->setText(QString("%1 ms").arg(noiseGateAttackSlider_->value()));
-    noiseGateReleaseValueLabel_->setText(QString("%1 ms").arg(noiseGateReleaseSlider_->value()));
-    compressorThresholdValueLabel_->setText(QString("%1 dB").arg(compressorThresholdSlider_->value()));
-    compressorRatioValueLabel_->setText(QString("%1:1").arg(compressorRatioSlider_->value()));
-}
-
-void MainWindow::onFiltersChanged() {
-    applyFilterSettingsFromUi();
-}
-
 void MainWindow::setControlsEnabled(bool recording) {
     deviceCombo_->setEnabled(!recording);
     exportButton_->setEnabled(!recording);
@@ -850,7 +701,7 @@ void MainWindow::setControlsEnabled(bool recording) {
                              addTrackAction_, removeTrackAction_, importAction_,
                              cutAction_, copyAction_, pasteAction_, deleteAction_,
                              silenceAction_, fadeInAction_, fadeOutAction_, crossfadeAction_,
-                             applyEffectAction_, addLabelAction_, selectAllAction_, normalizeAction_,
+                             trackEffectsAction_, applyTrackEffectsAction_, addLabelAction_, selectAllAction_, normalizeAction_,
                              voiceChangerAction_}) {
         action->setEnabled(!recording);
     }
@@ -1057,9 +908,24 @@ void MainWindow::stopPlaybackNow() {
     playButton_->setText("▶  Play");
 }
 
-void MainWindow::onExport() {
-    std::vector<float> buffer = project_.renderMixdown();
+bool MainWindow::exportMixdownTo(const QString& path, AudioFormat format, std::string* error) {
+    const std::vector<float> buffer = project_.renderMixdown(); // includes the track effects
+    std::string message;
+    bool ok = false;
     if (buffer.empty()) {
+        message = "Nothing to export";
+    } else {
+        ok = AudioFileWriter::write(path.toStdString(), buffer, static_cast<int>(project_.sampleRate),
+                                    project_.channels, format, message);
+    }
+    if (error != nullptr) {
+        *error = message;
+    }
+    return ok;
+}
+
+void MainWindow::onExport() {
+    if (project_.lengthFrames() <= 0) {
         QMessageBox::information(this, "Nothing to export", "Record or import something first.");
         return;
     }
@@ -1073,8 +939,7 @@ void MainWindow::onExport() {
     }
 
     std::string error;
-    bool ok = AudioFileWriter::write(path.toStdString(), buffer, static_cast<int>(project_.sampleRate),
-                                      project_.channels, format, error);
+    const bool ok = exportMixdownTo(path, format, &error);
     if (ok) {
         QMessageBox::information(this, "Exported", "Mixdown exported to:\n" + path);
     } else {
@@ -1694,14 +1559,30 @@ void MainWindow::stopVoicePreview() {
     }
 }
 
-void MainWindow::onApplyEffect() {
-    if (project_.selection.isEmpty()) {
+int MainWindow::effectsTargetTrack() const {
+    const int count = static_cast<int>(project_.tracks.size());
+    if (project_.selection.trackIndex >= 0 && project_.selection.trackIndex < count) {
+        return project_.selection.trackIndex;
+    }
+    const int armed = findArmedTrackIndex();
+    if (armed >= 0) {
+        return armed;
+    }
+    return count == 1 ? 0 : -1;
+}
+
+void MainWindow::onApplyTrackEffects() {
+    const int track = effectsTargetTrack();
+    if (track < 0 || engine_->isRecording() || !anyEffectActive(project_.tracks[static_cast<size_t>(track)].effects)) {
         return;
     }
-    const Selection sel = project_.selection;
-    undoStack_->push(new ApplyEffectCommand(project_, sel.trackIndex, sel.startFrame, sel.endFrame,
-                                             filterSettingsFromUi(), project_.sampleRate, project_.channels));
+    if (playbackActive_ || engine_->isPlaying()) {
+        stopPlaybackNow(); // the clips are about to be rewritten
+    }
+    undoStack_->push(new BakeTrackEffectsCommand(project_, track));
     trackPanel_->refresh();
+    statusLabel_->setText(QString("Applied %1's effects to its audio")
+                              .arg(QString::fromStdString(project_.tracks[static_cast<size_t>(track)].name)));
 }
 
 void MainWindow::setTrackEffectsLive(int trackIndex, const std::vector<Effect>& effects) {
@@ -1870,11 +1751,13 @@ void MainWindow::onSelectionChanged() {
     fadeInAction_->setEnabled(hasSelection);
     fadeOutAction_->setEnabled(hasSelection);
     crossfadeAction_->setEnabled(hasSelection);
-    // The button is a plain QPushButton (it isn't driven by the action), so
-    // both need setting or the menu entry advertises itself as available
-    // while the button is greyed out.
-    applyEffectAction_->setEnabled(hasSelection);
-    applyEffectButton_->setEnabled(hasSelection);
+    if (applyTrackEffectsAction_ != nullptr) {
+        const int track = effectsTargetTrack();
+        const bool recording = engine_->isRecording();
+        trackEffectsAction_->setEnabled(track >= 0 && !recording);
+        applyTrackEffectsAction_->setEnabled(
+            track >= 0 && !recording && anyEffectActive(project_.tracks[static_cast<size_t>(track)].effects));
+    }
     if (normalizeAction_ != nullptr) {
         normalizeAction_->setEnabled(projectHasAnyContent());
     }

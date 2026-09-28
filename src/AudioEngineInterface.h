@@ -57,19 +57,18 @@ public:
     // Jumps running playback to `frame` without restarting the stream.
     virtual void seekPlayback(int64_t frame) = 0;
 
-    virtual void setFilterSettings(const FilterSettings& settings) = 0;
-
-    // Digital input gain, in dB, applied to the captured signal before the
-    // filter chain. 0 dB (the default) records exactly what arrives.
+    // Digital input gain, in dB: the only processing on the capture path
+    // (effects are per-track and applied on playback). 0 dB (the default)
+    // records exactly what arrives.
     virtual void setInputGainDb(double db) = 0;
     virtual double inputGainDb() const = 0;
 
     // Level-meter blocks measured by the audio callbacks since the previous
     // call, appended to `out` oldest first: while recording, what is written
-    // to the take (after input gain and the filter chain) plus the raw input
-    // peak before any gain; while playing, the mixed output. Each block has
-    // per-channel peak, sum of squares (for RMS) and clip flags, and none is
-    // dropped: if the UI falls behind, blocks are merged, never lost.
+    // to the take (after the input gain) plus the raw input peak before any
+    // gain; while playing, the mixed output (after each track's effects).
+    // Each block has per-channel peak, sum of squares (for RMS) and clip
+    // flags, and none is dropped: if the UI falls behind, blocks are merged, never lost.
     // Lock-free on both sides; call from the UI thread.
     virtual size_t drainMeterBlocks(std::vector<MeterBlock>& out) = 0;
     // Clipping in the raw input (before any gain) during the current take, or
