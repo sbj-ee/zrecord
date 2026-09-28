@@ -81,6 +81,7 @@ private slots:
     void inputGainDefaultsToZeroAndIsRemembered();
     void inputClipIndicatorLatchesPerTake();
     void inputClipCountIsShownAndReportedAtStop();
+    void dropoutsBecomeLabelsAfterStop();
     void clippedSamplesArePaintedRed();
     void clipSelectionIsDroppedWhenTracksChange();
     void rulerClickSeeksWhileStopped();
@@ -895,6 +896,83 @@ void TestGui::inputClipCountIsShownAndReportedAtStop() {
     fake->setCapturedBuffer(std::vector<float>(100, 0.1f));
     findButton(window, "■  STOP")->click();
     QCOMPARE(status->text(), QString("Stopped"));
+}
+
+void TestGui::dropoutsBecomeLabelsAfterStop() {
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    auto* status = window.findChild<QLabel*>("status");
+    auto* undo = window.findChild<QUndoStack*>();
+    QVERIFY(status != nullptr && undo != nullptr);
+    const Project& project = window.projectForTest();
+    const double rate = project.sampleRate;
+    const int64_t ms10 = std::llround(rate * 0.010);
+
+    // A 1 s stereo take with two losses 20 ms apart (one label), one well
+    // clear of them, and one the host couldn't measure.
+    findButton(window, "●  RECORD")->click();
+    const int64_t takeFrames = std::llround(rate);
+    fake->setCapturedBuffer(std::vector<float>(size_t(takeFrames * 2), 0.1f));
+    fake->setTakeDropouts({
+        {4410, ms10, kDropoutRingOverrun, 1},
+        {4410 + ms10 + 882, ms10, kDropoutInputOverflow, 1},
+        {30000, 2 * ms10, kDropoutRingOverrun, 1},
+        {40000, 0, kDropoutInputOverflow, 1},
+    });
+    QVERIFY(project.labels.empty()); // nothing until Stop
+    window.tickForTest();
+    QVERIFY(project.labels.empty());
+    findButton(window, "■  STOP")->click();
+
+    QCOMPARE(project.labels.size(), size_t(3));
+    QCOMPARE(project.labels[0].startFrame, int64_t(4410));
+    QCOMPARE(project.labels[0].endFrame, int64_t(4410 + ms10 + 882 + ms10));
+    QCOMPARE(QString::fromStdString(project.labels[0].text), QString::fromUtf8("Dropout \u00d72, 20 ms"));
+    QCOMPARE(project.labels[1].startFrame, int64_t(30000));
+    QCOMPARE(project.labels[1].endFrame, int64_t(30000 + 2 * ms10));
+    QCOMPARE(QString::fromStdString(project.labels[1].text), QString("Dropout 20 ms"));
+    QCOMPARE(project.labels[2].startFrame, int64_t(40000));
+    QVERIFY(!project.labels[2].isRange());
+    QCOMPARE(QString::fromStdString(project.labels[2].text), QString("Dropout (length unknown)"));
+    QVERIFY2(status->text().contains("4 dropouts, 40 ms lost (some of unknown length)"), qPrintable(status->text()));
+    QVERIFY(status->text().startsWith("Stopped"));
+
+    // The take and its labels are one undo step.
+    QCOMPARE(undo->count(), 2); // "Add Track" (the first take made Track 1), then "Record"
+    QCOMPARE(undo->undoText(), QString("Record"));
+    undo->undo();
+    QVERIFY(project.labels.empty());
+    QVERIFY(project.tracks[0].clips.empty());
+    undo->redo();
+    QCOMPARE(project.labels.size(), size_t(3));
+    QCOMPARE(project.tracks[0].clips.size(), size_t(1));
+
+    // A second take lands after the first; its labels are placed on it.
+    findButton(window, "●  RECORD")->click();
+    fake->setCapturedBuffer(std::vector<float>(size_t(takeFrames * 2), 0.1f));
+    fake->setTakeDropouts({{1000, ms10, kDropoutRingOverrun, 1}});
+    findButton(window, "■  STOP")->click();
+    QCOMPARE(project.labels.size(), size_t(4));
+    QCOMPARE(project.labels[3].startFrame, takeFrames + 1000);
+    QCOMPARE(QString::fromStdString(project.labels[3].text), QString("Dropout 10 ms"));
+    QVERIFY2(status->text().contains("1 dropout, 10 ms lost"), qPrintable(status->text()));
+
+    // A clean take adds no labels and says so plainly.
+    findButton(window, "●  RECORD")->click();
+    fake->setCapturedBuffer(std::vector<float>(100, 0.1f));
+    findButton(window, "■  STOP")->click();
+    QCOMPARE(project.labels.size(), size_t(4));
+    QCOMPARE(status->text(), QString("Stopped"));
+
+    // Clipping and dropouts are both reported.
+    findButton(window, "●  RECORD")->click();
+    fake->setCapturedBuffer(std::vector<float>(size_t(takeFrames * 2), 0.1f));
+    fake->setInputClipStats({2, 6});
+    fake->setTakeDropouts({{500, ms10, kDropoutRingOverrun, 1}});
+    findButton(window, "■  STOP")->click();
+    QVERIFY2(status->text().contains("the input clipped 2 times (6 samples); 1 dropout, 10 ms lost"),
+             qPrintable(status->text()));
 }
 
 namespace {

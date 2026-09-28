@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "Dropouts.h"
 #include "Filters.h"
 #include "Meter.h"
 #include "Project.h"
@@ -74,6 +75,11 @@ public:
     // Clipping in the raw input (before any gain) during the current take, or
     // the last one once stopped. Starts again from zero with every take.
     virtual InputClipStats inputClipStats() const = 0;
+    // Input lost during the current take, or the last one once stopped:
+    // where (frames into the take) and how much, oldest first. Lost stretches
+    // are padded with silence in the take, so these line up with its audio.
+    // Complete only after stopRecording().
+    virtual std::vector<LostInterval> takeDropouts() const = 0;
     virtual double capturedSeconds() const = 0;
     virtual std::vector<float> copyCapturedBuffer() const = 0;
     virtual std::vector<float> consumeNewSamples() = 0;

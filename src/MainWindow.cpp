@@ -965,19 +965,46 @@ void MainWindow::onToggleRecord() {
             }
             captured = std::move(stereo);
         }
+        // Input lost during the take was padded with silence (so the rest
+        // stays in time); mark each loss with a label over the padding.
+        const std::vector<DropoutSpan> dropouts =
+            mergeDropouts(engine_->takeDropouts(), dropoutJoinFrames(project_.sampleRate));
         if (!captured.empty() && recordingArmedTrackIndex_ >= 0) {
+            const int64_t takeStart =
+                project_.tracks[static_cast<size_t>(recordingArmedTrackIndex_)].endFrame();
+            const int64_t takeFrames = static_cast<int64_t>(captured.size()) / std::max(1, project_.channels);
+            // The take and its dropout labels are one step: undo removes both.
+            undoStack_->beginMacro("Record");
             undoStack_->push(new AppendClipCommand(project_, recordingArmedTrackIndex_, std::move(captured),
                                                    project_.channels, "Record"));
+            for (const DropoutSpan& span : dropouts) {
+                if (span.startFrame > takeFrames) {
+                    continue; // can't happen with a padded take; never label past its end
+                }
+                Label label;
+                label.startFrame = takeStart + span.startFrame;
+                label.endFrame = takeStart + std::min(span.endFrame, takeFrames);
+                label.text = dropoutLabelText(span, project_.sampleRate);
+                undoStack_->push(new AddLabelCommand(project_, label));
+            }
+            undoStack_->endMacro();
         }
         recordingArmedTrackIndex_ = -1;
         trackPanel_->refresh();
         const InputClipStats clips = engine_->inputClipStats();
-        statusLabel_->setText(clips.events > 0
-                                  ? QString("Stopped \u2014 the input clipped %1 time%2 (%3 samples)")
-                                        .arg(clips.events)
-                                        .arg(clips.events == 1 ? "" : "s")
-                                        .arg(clips.samples)
-                                  : QString("Stopped"));
+        QStringList problems;
+        if (clips.events > 0) {
+            problems << QString("the input clipped %1 time%2 (%3 samples)")
+                            .arg(clips.events)
+                            .arg(clips.events == 1 ? "" : "s")
+                            .arg(clips.samples);
+        }
+        const std::string lost = dropoutSummary(dropouts, project_.sampleRate);
+        if (!lost.empty()) {
+            problems << QString::fromStdString(lost) + ", filled with silence and labelled";
+        }
+        statusLabel_->setText(problems.isEmpty() ? QString("Stopped")
+                                                 : QString("Stopped \u2014 ") + problems.join("; "));
 
         recordButton_->setText("●  RECORD");
         recordButton_->setStyleSheet(
