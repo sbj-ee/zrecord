@@ -72,6 +72,36 @@ void ApplyEffectCommand::apply() {
     Project::writeRange(track(), startFrame_, endFrame_, region, channels_);
 }
 
+SetTrackEffectsCommand::SetTrackEffectsCommand(Project& project, int trackIndex, std::vector<Effect> before,
+                                               std::vector<Effect> after)
+    : QUndoCommand("Track Effects"),
+      project_(project),
+      trackIndex_(trackIndex),
+      before_(std::move(before)),
+      after_(std::move(after)) {}
+
+void SetTrackEffectsCommand::redo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.tracks[static_cast<size_t>(trackIndex_)].effects = after_;
+}
+
+void SetTrackEffectsCommand::undo() {
+    std::lock_guard<std::mutex> lock(project_.mutex);
+    project_.tracks[static_cast<size_t>(trackIndex_)].effects = before_;
+}
+
+BakeTrackEffectsCommand::BakeTrackEffectsCommand(Project& project, int trackIndex)
+    : TrackEditCommand(project, trackIndex, "Apply Track Effects") {}
+
+void BakeTrackEffectsCommand::apply() {
+    // TrackEditCommand snapshots the whole track (clips and stack), so undo
+    // brings back both the raw audio and the effects.
+    const std::vector<float> rendered =
+        Project::renderTrackEffects(track(), project().sampleRate, project().channels);
+    Project::writeRange(track(), 0, track().endFrame(), rendered, project().channels);
+    track().effects.clear();
+}
+
 FadeCommand::FadeCommand(Project& project, int trackIndex, int64_t startFrame, int64_t endFrame,
                           FadeShape shape, int channels)
     : TrackEditCommand(project, trackIndex, shape == FadeShape::In ? "Fade In" : "Fade Out"),

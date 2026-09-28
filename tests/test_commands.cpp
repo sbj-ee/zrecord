@@ -1,9 +1,11 @@
 #include <QUndoStack>
 #include <QtTest>
 
+#include <cmath>
 #include <fstream>
 
 #include "Commands.h"
+#include "PlaybackMixer.h"
 
 using namespace zrecord;
 
@@ -36,6 +38,9 @@ private slots:
     void init();
 
     void smallEditsDontDuplicateTheTake();
+    void setTrackEffects_undoAndRedo();
+    void bakeTrackEffects_equalsPlaybackAndIsOneUndoStep();
+    void bakeTrackEffects_keepsClipBoundaries();
 
     void deleteSelection_undoRestoresAudio();
     void silenceSelection_undoRestoresAudio();
@@ -380,6 +385,113 @@ void TestCommands::smallEditsDontDuplicateTheTake() {
     stack.undo();
     stack.undo();
     QVERIFY(project.tracks[0].clips[0].samples == recorded);
+}
+
+namespace {
+// Stereo project with one track: a decaying two-tone clip starting at 0.
+void fillToneProject(Project& project, int64_t frames) {
+    project.reset();
+    project.channels = 2;
+    project.sampleRate = 44100.0;
+    std::vector<float> samples(static_cast<size_t>(frames * 2));
+    for (int64_t f = 0; f < frames; ++f) {
+        const double t = double(f) / 44100.0;
+        const float env = float(std::exp(-t * 3.0));
+        samples[size_t(2 * f)] = 0.6f * env * float(std::sin(2 * M_PI * 330 * t));
+        samples[size_t(2 * f + 1)] = 0.5f * env * float(std::sin(2 * M_PI * 550 * t));
+    }
+    Track track;
+    Clip clip;
+    clip.channels = 2;
+    clip.samples = samples;
+    clip.peaks.build(clip.samples, 2);
+    track.clips.push_back(clip);
+    project.tracks.push_back(track);
+}
+
+// Playback from the start through the real mixer, in 512-frame callbacks.
+std::vector<float> playFromStart(Project& project) {
+    PlaybackMixer mixer;
+    mixer.publish(PlaybackSnapshot::capture(project));
+    const int64_t length = project.lengthFrames();
+    std::vector<float> out(size_t(length * 2));
+    std::vector<float> block(1024);
+    for (int64_t pos = 0; pos < length; pos += 512) {
+        mixer.render(pos, block.data(), 512, 2);
+        const int64_t n = std::min<int64_t>(512, length - pos);
+        std::copy(block.begin(), block.begin() + n * 2, out.begin() + pos * 2);
+    }
+    mixer.clear();
+    return out;
+}
+} // namespace
+
+void TestCommands::setTrackEffects_undoAndRedo() {
+    const std::vector<Effect> before = {Effect::make(EffectType::Gain)};
+    std::vector<Effect> after = {Effect::make(EffectType::Echo), Effect::make(EffectType::Gain)};
+    after[1].bypassed = true;
+    project_.tracks[0].effects = before;
+    stack_.push(new SetTrackEffectsCommand(project_, 0, before, after));
+    QVERIFY(project_.tracks[0].effects == after);
+    QCOMPARE(stack_.undoText(), QString("Track Effects"));
+    stack_.undo();
+    QVERIFY(project_.tracks[0].effects == before);
+    stack_.redo();
+    QVERIFY(project_.tracks[0].effects == after);
+    QVERIFY(project_.tracks[1].effects.empty());
+}
+
+void TestCommands::bakeTrackEffects_equalsPlaybackAndIsOneUndoStep() {
+    Project project;
+    fillToneProject(project, 44100);
+    Effect gate = Effect::make(EffectType::NoiseGate);
+    gate.params[0] = -35.0;
+    project.tracks[0].effects = {Effect::make(EffectType::Compressor), Effect::make(EffectType::Echo), gate,
+                                 Effect::make(EffectType::DeepVoice), Effect::make(EffectType::LowPass)};
+    const std::vector<Effect> stackBefore = project.tracks[0].effects;
+    const std::vector<float> raw = Project::copyRange(project.tracks[0], 0, 44100, 2);
+    const std::vector<float> heard = playFromStart(project);
+    QVERIFY(heard != raw);
+
+    QUndoStack stack;
+    stack.push(new BakeTrackEffectsCommand(project, 0));
+    QCOMPARE(stack.count(), 1);
+    QCOMPARE(stack.undoText(), QString("Apply Track Effects"));
+    QVERIFY(project.tracks[0].effects.empty());
+    // The baked clip, played dry, is exactly what the stack made of it.
+    QCOMPARE(Project::copyRange(project.tracks[0], 0, 44100, 2), heard);
+    QCOMPARE(playFromStart(project), heard);
+
+    stack.undo(); // raw audio and the stack, both back
+    QCOMPARE(Project::copyRange(project.tracks[0], 0, 44100, 2), raw);
+    QVERIFY(project.tracks[0].effects == stackBefore);
+    QCOMPARE(playFromStart(project), heard);
+    stack.redo();
+    QVERIFY(project.tracks[0].effects.empty());
+    QCOMPARE(Project::copyRange(project.tracks[0], 0, 44100, 2), heard);
+}
+
+void TestCommands::bakeTrackEffects_keepsClipBoundaries() {
+    // Two clips with a gap: each keeps its place and length, and gets the
+    // stack's output for its span (rendered continuously from the start).
+    Project project;
+    project.channels = 1;
+    Track track;
+    track.clips.push_back(makeRamp(100, 50, 0.01f));
+    track.clips.push_back(makeRamp(400, 50, 0.02f));
+    Effect gain = Effect::make(EffectType::Gain);
+    gain.params[0] = 20.0 * std::log10(2.0); // x2
+    track.effects = {gain};
+    project.tracks.push_back(track);
+    QUndoStack stack;
+    stack.push(new BakeTrackEffectsCommand(project, 0));
+    const Track& baked = project.tracks[0];
+    QCOMPARE(baked.clips.size(), size_t(2));
+    QCOMPARE(baked.clips[0].startFrame, int64_t(100));
+    QCOMPARE(baked.clips[1].startFrame, int64_t(400));
+    QCOMPARE(baked.clips[0].frameCount(), int64_t(50));
+    QVERIFY(std::fabs(baked.clips[0].samples[0] - 0.02f) < 1e-6f);
+    QVERIFY(std::fabs(baked.clips[1].samples[49] - 2.0f * (0.02f + 49.0f)) < 1e-3f); // not clamped
 }
 
 QTEST_GUILESS_MAIN(TestCommands)
