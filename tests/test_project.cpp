@@ -51,6 +51,8 @@ private slots:
     void envelope_interpolatesAndHoldsAtTheEnds();
     void envelope_replacesAPointAtTheSameFrame();
     void readMix_appliesTheEnvelope();
+    void renderMixdown_includesTrackEffects();
+    void renderTrackEffects_isUnclampedAndIgnoresGain();
     void crossfadeClips_mergesAndShortensTrack();
     void crossfadeClips_holdsEqualPowerAcrossTheJoin();
     void crossfadeClips_rejectsBadInputWithoutMutating();
@@ -386,6 +388,49 @@ void TestProject::crossfadeClips_rejectsBadInputWithoutMutating() {
     QCOMPARE(track.clips.size(), before.size());
     QCOMPARE(track.clips[0].samples, before[0].samples);
     QCOMPARE(track.clips[1].samples, before[1].samples);
+}
+
+void TestProject::renderMixdown_includesTrackEffects() {
+    Project project;
+    project.channels = 1;
+    Track track;
+    Clip clip;
+    clip.channels = 1;
+    clip.samples = SampleBuffer(std::vector<float>(1000, 0.25f));
+    track.clips.push_back(clip);
+    project.tracks.push_back(track);
+    const std::vector<float> dry = project.renderMixdown();
+    QCOMPARE(dry[500], 0.25f);
+
+    Effect gain = Effect::make(EffectType::Gain);
+    gain.params[0] = 6.0;
+    project.tracks[0].effects = {gain};
+    const std::vector<float> wet = project.renderMixdown();
+    QVERIFY(std::fabs(wet[500] - 0.25f * float(std::pow(10.0, 6.0 / 20.0))) < 1e-6f);
+
+    project.tracks[0].effects[0].bypassed = true;
+    QCOMPARE(project.renderMixdown(), dry);
+}
+
+void TestProject::renderTrackEffects_isUnclampedAndIgnoresGain() {
+    // What baking writes into clips: the stack on the raw audio, not the
+    // track fader or envelope, and not clamped (clips may exceed full scale).
+    Track track;
+    Clip clip;
+    clip.channels = 2;
+    clip.startFrame = 10;
+    clip.samples = SampleBuffer(std::vector<float>(200, 0.5f));
+    track.clips.push_back(clip);
+    track.gainDb = -12.0;
+    track.envelope = {{0, 0.1f}};
+    Effect gain = Effect::make(EffectType::Gain);
+    gain.params[0] = 12.0;
+    track.effects = {gain};
+    const std::vector<float> out = Project::renderTrackEffects(track, 44100.0, 2);
+    QCOMPARE(out.size(), size_t(110 * 2));
+    QCOMPARE(out[0], 0.0f); // before the clip
+    QVERIFY(std::fabs(out[2 * 50] - 0.5f * float(std::pow(10.0, 12.0 / 20.0))) < 1e-5f);
+    QVERIFY(out[2 * 50 + 1] > 1.9f);
 }
 
 QTEST_GUILESS_MAIN(TestProject)

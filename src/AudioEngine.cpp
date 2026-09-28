@@ -255,7 +255,7 @@ void AudioEngine::refreshPlayback() {
     if (playbackProject_ == nullptr || outputStream_ == nullptr) {
         return;
     }
-    mixer_.publish(PlaybackSnapshot::capture(*playbackProject_));
+    mixer_.publish(PlaybackSnapshot::capture(*playbackProject_, mixer_.currentEffects()));
 }
 
 bool AudioEngine::isPlaying() const {

@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "Effects.h"
 #include "SampleBuffer.h"
 
 namespace zrecord {
@@ -89,6 +90,10 @@ struct Track {
     bool recordArmed = false;
     double gainDb = 0.0;
     std::vector<EnvelopePoint> envelope; // kept sorted by frame; empty = unity
+    // Non-destructive effects, applied in order on playback and export, to
+    // the track's audio before its gain and envelope. The clips themselves
+    // hold the raw recording until the stack is baked into them.
+    std::vector<Effect> effects;
 
     int64_t endFrame() const;
 
@@ -100,6 +105,43 @@ struct Track {
     // frame. Returns its index.
     int insertEnvelopePoint(const EnvelopePoint& point);
 };
+
+// The effect stacks of a set of tracks at runtime (one EffectStack per track
+// that has effects), plus the scratch buffer the mix runs them in. Built on
+// the UI thread; rendering is real-time safe. Effects are stateful, so the
+// rack also notices when rendering doesn't continue where it left off (a
+// seek, or playback restarting) and starts every effect from rest there.
+class EffectRack {
+public:
+    static constexpr int64_t kBlockFrames = 1024; // tracks are processed in slices of this
+
+    // UI thread. Not real-time safe.
+    void prepare(const std::vector<Track>& tracks, double sampleRate, int channels);
+    // UI thread: the same tracks' effect types in the same order, at the same
+    // rate and width, so publish() can carry the rest over lock-free.
+    bool sameStructure(const std::vector<Track>& tracks, double sampleRate, int channels) const;
+    // UI thread: new parameters and bypass flags (see EffectStack::publish).
+    void publish(const std::vector<Track>& tracks);
+
+    // Rendering side.
+    EffectStack* stack(size_t trackIndex) {
+        return trackIndex < stacks_.size() ? stacks_[trackIndex].get() : nullptr;
+    }
+    float* scratch() { return scratch_.data(); }
+    // Called once per render with its position: resets every effect when
+    // this block doesn't follow the previous one.
+    void beginRender(int64_t position, int64_t frames);
+
+private:
+    std::vector<std::unique_ptr<EffectStack>> stacks_; // null where a track has no effects
+    std::vector<float> scratch_;
+    double sampleRate_ = 0.0;
+    int channels_ = 0;
+    int64_t nextPosition_ = -1; // rendering side
+};
+
+// True if any of `tracks` has an effect stack (even a bypassed one).
+bool anyTrackHasEffects(const std::vector<Track>& tracks);
 
 // A named point or span on the timeline. Labels belong to the project rather
 // than to a track (Audacity puts them in a dedicated label *track*); with a
@@ -205,16 +247,29 @@ public:
     // otherwise all unmuted tracks) over [startFrame, startFrame+frameCount)
     // into `out`, which must already be sized frameCount*channels and will
     // be overwritten (not accumulated into). Caller must hold `mutex`.
+    // This is the dry mix, without track effects: they are stateful, so they
+    // are only rendered continuously (playback, renderMixdown).
     void readMix(int64_t startFrame, int64_t frameCount, std::vector<float>& out) const;
 
     // The mixing behind readMix, over any set of tracks: writes
     // frameCount*channels samples to `out`. Allocation- and lock-free, so the
     // playback callback can call it on a snapshot.
+    //
+    // With a rack, each track's effect stack runs on its audio (from the rack,
+    // which must have been prepared for these tracks) before the track's gain
+    // and envelope. Without one the mix is dry.
     static void mixTracks(const std::vector<Track>& tracks, int channels, int64_t startFrame,
-                          int64_t frameCount, float* out);
+                          int64_t frameCount, float* out, EffectRack* rack = nullptr);
 
-    // Renders the whole project to one interleaved buffer, for export.
+    // Renders the whole project to one interleaved buffer, for export,
+    // with every track's effects (rendered from the start, exactly as
+    // playback from the start hears them).
     std::vector<float> renderMixdown() const;
+
+    // One track's audio from frame 0 to its end through its effect stack, at
+    // unity gain and without its envelope: what baking the stack writes into
+    // its clips. Interleaved, `channels` wide.
+    static std::vector<float> renderTrackEffects(const Track& track, double sampleRate, int channels);
 };
 
 } // namespace zrecord
