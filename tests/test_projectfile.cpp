@@ -58,6 +58,9 @@ private slots:
     void loadResamplesClipsAtAnotherRate();
     void resaveReplacesAndPrunesStaleAudio();
     void failedSaveKeepsThePreviousProject();
+    void effectStacksRoundTrip();
+    void projectsWithoutEffectsStillLoad();
+    void unknownEffectsAndMissingParamsAreTolerated();
 };
 
 void TestProjectFile::saveKeepsSamplesBeyondFullScale() {
@@ -291,6 +294,78 @@ void TestProjectFile::failedSaveKeepsThePreviousProject() {
     for (const Clip& clip : back.tracks[0].clips) {
         QCOMPARE(clip.samples.toVector(), (std::vector<float>{0.1f, 0.2f}));
     }
+}
+
+void TestProjectFile::effectStacksRoundTrip() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    Project project;
+    fill(project, {0.1f, 0.2f});
+    Track second;
+    second.name = "Dry";
+    project.tracks.push_back(second);
+    Effect echo = Effect::make(EffectType::Echo);
+    echo.params = {512.0, 0.6, 0.25};
+    Effect gain = Effect::make(EffectType::Gain);
+    gain.params[0] = -3.5;
+    gain.bypassed = true;
+    project.tracks[0].effects = {echo, gain, Effect::make(EffectType::Chipmunk), Effect::make(EffectType::Limiter)};
+    const std::string path = dir.filePath("fx.zrproj").toStdString();
+    std::string error;
+    QVERIFY2(ProjectFile::save(project, path, error), error.c_str());
+
+    Project loaded;
+    QVERIFY2(ProjectFile::load(loaded, path, error), error.c_str());
+    QCOMPARE(loaded.tracks.size(), size_t(2));
+    QVERIFY(loaded.tracks[0].effects == project.tracks[0].effects); // order, params, bypass
+    QVERIFY(loaded.tracks[1].effects.empty());
+}
+
+void TestProjectFile::projectsWithoutEffectsStillLoad() {
+    // A project saved before track effects existed (no "effects" key).
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QDir(dir.path()).mkpath("old.zrproj/audio");
+    const QString root = dir.filePath("old.zrproj");
+    QVERIFY(writeRaw(root + "/audio/track0_clip0.wav", {0.0f, 0.25f}, SF_FORMAT_WAV | SF_FORMAT_FLOAT));
+    QFile json(root + "/project.json");
+    QVERIFY(json.open(QIODevice::WriteOnly));
+    json.write(R"({"sampleRate":44100,"channels":1,"labels":[],
+        "tracks":[{"name":"Old","muted":false,"soloed":false,"gainDb":0,"envelope":[],"display":"waveform",
+                   "clips":[{"file":"audio/track0_clip0.wav","startFrame":"0"}]}]})");
+    json.close();
+    Project loaded;
+    std::string error;
+    QVERIFY2(ProjectFile::load(loaded, root.toStdString(), error), error.c_str());
+    QCOMPARE(loaded.tracks.size(), size_t(1));
+    QVERIFY(loaded.tracks[0].effects.empty());
+    QCOMPARE(loaded.tracks[0].clips[0].samples.size(), size_t(2));
+}
+
+void TestProjectFile::unknownEffectsAndMissingParamsAreTolerated() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QDir(dir.path()).mkpath("new.zrproj");
+    const QString root = dir.filePath("new.zrproj");
+    QFile json(root + "/project.json");
+    QVERIFY(json.open(QIODevice::WriteOnly));
+    json.write(R"({"sampleRate":44100,"channels":1,"labels":[],
+        "tracks":[{"name":"T","clips":[],"effects":[
+            {"type":"reverb","params":{"size":0.5}},
+            {"type":"echo","bypassed":true,"params":{"delayMs":100}},
+            {"type":"gain","params":{"gainDb":99}}]}]})");
+    json.close();
+    Project loaded;
+    std::string error;
+    QVERIFY2(ProjectFile::load(loaded, root.toStdString(), error), error.c_str());
+    const std::vector<Effect>& fx = loaded.tracks[0].effects;
+    QCOMPARE(fx.size(), size_t(2)); // the unknown "reverb" is skipped
+    QCOMPARE(fx[0].type, EffectType::Echo);
+    QVERIFY(fx[0].bypassed);
+    QCOMPARE(fx[0].param(0), 100.0);
+    QCOMPARE(fx[0].param(1), 0.35); // missing: the default
+    QCOMPARE(fx[1].type, EffectType::Gain);
+    QCOMPARE(fx[1].param(0), 24.0); // clamped into range
 }
 
 QTEST_GUILESS_MAIN(TestProjectFile)
