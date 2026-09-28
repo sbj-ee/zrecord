@@ -120,6 +120,7 @@ public:
     // way to run the timer tick without waiting for it.
     const Project* previewProjectForTest() const { return previewActive_ ? previewProject_.get() : nullptr; }
     void tickForTest() { onTick(); }
+    const Project& projectForTest() const { return project_; }
 
 protected:
     void closeEvent(QCloseEvent* event) override;
