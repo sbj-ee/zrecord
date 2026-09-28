@@ -70,6 +70,9 @@ public:
         }
 
         size_t first = std::min(available, size - readPos);
+        // One exact reservation: two inserts into a vector growing by
+        // doubling could otherwise leave it with room for twice the ring.
+        out.reserve(out.size() + available);
         out.insert(out.end(), data_.begin() + static_cast<long>(readPos),
                     data_.begin() + static_cast<long>(readPos + first));
         if (available > first) {
