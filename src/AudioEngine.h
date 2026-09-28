@@ -9,6 +9,7 @@
 
 #include "AudioEngineInterface.h"
 #include "Capture.h"
+#include "Dropouts.h"
 #include "Filters.h"
 #include "Meter.h"
 #include "PlaybackMixer.h"
@@ -65,6 +66,15 @@ public:
     double inputGainDb() const override;
     size_t drainMeterBlocks(std::vector<MeterBlock>& out) override;
     InputClipStats inputClipStats() const override;
+    std::vector<LostInterval> takeDropouts() const override;
+    // Frames of this take lost and padded with silence so far.
+    int64_t lostFrames() const { return captureWriter_.lostFrames(); }
+    // Fault injection for tests: the next input callback behaves as if the
+    // host had dropped `frames` of input just before it (paInputOverflow with
+    // a measured gap). Safe to call while recording.
+    void simulateInputOverflowForTesting(int64_t frames) {
+        injectedInputLoss_.store(frames, std::memory_order_relaxed);
+    }
     double capturedSeconds() const override;
     size_t capturedFrameCount() const;
 
@@ -92,7 +102,7 @@ private:
                                      const PaStreamCallbackTimeInfo* timeInfo,
                                      unsigned long statusFlags, void* userData);
 
-    int handleInput(const float* input, unsigned long frameCount);
+    int handleInput(const float* input, unsigned long frameCount, bool overflow, double adcTime);
     int handleOutput(float* output, unsigned long frameCount);
 
     PaStream* inputStream_ = nullptr;
@@ -113,6 +123,10 @@ private:
     FilterChain filterChain_;   // audio thread only, once recording starts
     std::vector<float> scratch_; // preallocated so the callback never allocates
     RingBuffer captureRing_;
+    // Writes blocks into captureRing_, pads losses with silence and logs
+    // them (see Dropouts.h). Audio thread while recording.
+    CaptureWriter captureWriter_;
+    std::atomic<int64_t> injectedInputLoss_{0}; // tests only; see above
 
     std::vector<float> captureBuffer_; // UI thread only
     size_t consumedOffset_ = 0;

@@ -93,6 +93,8 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
     // out if the UI thread is wedged, and then the overrun flag reports it.
     const size_t ringFrames = static_cast<size_t>(sampleRate_ * 10.0);
     captureRing_.reset(ringFrames * static_cast<size_t>(channels_));
+    captureWriter_.reset(&captureRing_, channels_, sampleRate_);
+    injectedInputLoss_.store(0, std::memory_order_relaxed);
     // paFramesPerBufferUnspecified means the host picks; size the scratch
     // generously and grow it in the callback only if the host ever exceeds it.
     scratch_.assign(static_cast<size_t>(sampleRate_ * 0.5) * static_cast<size_t>(channels_), 0.0f);
@@ -134,6 +136,11 @@ void AudioEngine::stopRecording() {
         // The callback can't run any more, so its feed is ours now.
         MeterBlock tail;
         if (inputMeterFeed_.takePending(tail)) inputMeterTail_.merge(tail);
+        // Silence still owed for the last losses completes the take, so its
+        // length matches the time it covered.
+        const int64_t owed = captureWriter_.finish();
+        drainCapture();
+        captureBuffer_.insert(captureBuffer_.end(), static_cast<size_t>(owed) * static_cast<size_t>(channels_), 0.0f);
     }
     recording_ = false;
 }
@@ -311,6 +318,10 @@ size_t AudioEngine::drainMeterBlocks(std::vector<MeterBlock>& out) {
     return n;
 }
 
+std::vector<LostInterval> AudioEngine::takeDropouts() const {
+    return captureWriter_.log().intervals();
+}
+
 InputClipStats AudioEngine::inputClipStats() const {
     return {inputClipEvents_.load(std::memory_order_relaxed), inputClippedSamples_.load(std::memory_order_relaxed)};
 }
@@ -341,10 +352,11 @@ std::vector<float> AudioEngine::consumeNewSamples() {
 }
 
 int AudioEngine::inputCallbackStatic(const void* input, void* /*output*/, unsigned long frameCount,
-                                      const PaStreamCallbackTimeInfo* /*timeInfo*/,
-                                      unsigned long /*statusFlags*/, void* userData) {
+                                      const PaStreamCallbackTimeInfo* timeInfo,
+                                      unsigned long statusFlags, void* userData) {
     auto* self = static_cast<AudioEngine*>(userData);
-    return self->handleInput(static_cast<const float*>(input), frameCount);
+    return self->handleInput(static_cast<const float*>(input), frameCount, (statusFlags & paInputOverflow) != 0,
+                             timeInfo != nullptr ? timeInfo->inputBufferAdcTime : 0.0);
 }
 
 int AudioEngine::outputCallbackStatic(const void* /*input*/, void* output, unsigned long frameCount,
@@ -354,7 +366,7 @@ int AudioEngine::outputCallbackStatic(const void* /*input*/, void* output, unsig
     return self->handleOutput(static_cast<float*>(output), frameCount);
 }
 
-int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
+int AudioEngine::handleInput(const float* input, unsigned long frameCount, bool overflow, double adcTime) {
     // Real-time thread. No allocation, no blocking lock, no unbounded growth:
     // the scratch block is preallocated, settings are picked up with try_lock,
     // and the samples leave via a lock-free ring the UI drains.
@@ -367,6 +379,14 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
             settingsDirty_.store(false, std::memory_order_relaxed);
         }
     }
+
+    // Input the host dropped before this callback (paInputOverflow) becomes
+    // silence of the measured length, ahead of this block.
+    const int64_t injected = injectedInputLoss_.exchange(0, std::memory_order_relaxed);
+    if (injected > 0) {
+        captureWriter_.noteHostLoss(injected);
+    }
+    captureWriter_.beginCallback(frameCount, overflow, adcTime);
 
     // The scratch block (0.5 s, sized at startRecording) is never grown here:
     // a host block larger than that is processed in slices instead of
@@ -393,7 +413,7 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
         // samples, carried across callbacks) before the gain touches it.
         processCaptureBlock(scratch_, frames, channels_, gain, filterChain_, &inputClip_);
         inputMeterFeed_.addSignal(scratch_.data(), frames); // what the take gets
-        captureRing_.write(scratch_.data(), count);
+        captureWriter_.write(scratch_.data(), frames); // or logs it lost, if the ring is full
     }
 
     inputMeterFeed_.publish(inputMeterQueue_);

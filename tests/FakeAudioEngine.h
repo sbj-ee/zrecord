@@ -28,6 +28,7 @@ public:
         lastRecordingDevice_ = deviceIndex;
         lastRecordingChannels_ = channels;
         inputClip_ = {};
+        dropouts_.clear();
         return true;
     }
     int lastRecordingDevice() const { return lastRecordingDevice_; }
@@ -86,6 +87,9 @@ public:
     }
     InputClipStats inputClipStats() const override { return inputClip_; }
     void setInputClipStats(InputClipStats stats) { inputClip_ = stats; }
+    std::vector<LostInterval> takeDropouts() const override { return dropouts_; }
+    // Losses in the take handed over at the next Stop (frames into the take).
+    void setTakeDropouts(std::vector<LostInterval> dropouts) { dropouts_ = std::move(dropouts); }
     double capturedSeconds() const override { return 0.0; }
     std::vector<float> copyCapturedBuffer() const override { return captured_; }
     std::vector<float> consumeNewSamples() override { return {}; }
@@ -100,6 +104,7 @@ public:
 
 private:
     InputClipStats inputClip_;
+    std::vector<LostInterval> dropouts_;
     bool recording_ = false;
     bool playing_ = false;
     bool muted_ = false;

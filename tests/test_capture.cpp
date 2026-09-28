@@ -65,6 +65,8 @@ private slots:
     void realEngineCleanFullScaleSineIsNotAClip();
     void realEngineMeterShowsTheRecordedLevel();
     void realEngineMeterBlocksCarryRmsAndEveryFrame();
+    void realEngineInjectedOverflowIsPaddedInPlace();
+    void realEngineRingOverrunIsPaddedInPlace();
 
 private:
     // Records a short take of `infile` (S16 stereo at 44.1 kHz) through the
@@ -576,6 +578,155 @@ void TestCapture::realEngineMeterBlocksCarryRmsAndEveryFrame() {
         QCOMPARE(meter_.inputPeak[c], meter_.peak[c]); // 0 dB input gain
     }
     QVERIFY(meter_.lastSequence >= meter_.firstSequence);
+}
+
+namespace {
+// Stereo S16 input that is never exactly zero (a sine riding on a DC
+// offset), so any silent frame in a take is padding.
+std::vector<int16_t> s16NeverSilent(size_t frames) {
+    std::vector<int16_t> s(frames * 2);
+    for (size_t i = 0; i < frames; ++i) {
+        const double v = std::round(32767.0 * (0.3 + 0.25 * std::sin(2.0 * M_PI * 440.0 * double(i) / kRate)));
+        s[2 * i] = s[2 * i + 1] = static_cast<int16_t>(v);
+    }
+    return s;
+}
+
+bool isSilentFrame(const std::vector<float>& take, int64_t i) {
+    return take[size_t(2 * i)] == 0.0f && take[size_t(2 * i + 1)] == 0.0f;
+}
+
+// Every silent frame of `take` is inside a logged interval and every frame
+// of an interval is silent. Returns a problem, or an empty string.
+QString silenceMatchesIntervals(const std::vector<float>& take, const std::vector<LostInterval>& lost) {
+    const int64_t frames = int64_t(take.size() / 2);
+    size_t k = 0;
+    for (int64_t i = 0; i < frames; ++i) {
+        while (k < lost.size() && i >= lost[k].endFrame()) ++k;
+        const bool inLoss = k < lost.size() && i >= lost[k].startFrame;
+        if (inLoss != isSilentFrame(take, i)) {
+            return QString("frame %1: %2 but %3").arg(i).arg(inLoss ? "logged lost" : "not logged lost")
+                .arg(isSilentFrame(take, i) ? "silent" : "not silent");
+        }
+    }
+    return {};
+}
+} // namespace
+
+void TestCapture::realEngineInjectedOverflowIsPaddedInPlace() {
+    // The host dropping input (paInputOverflow with a measured gap) can't be
+    // provoked on demand, so it is injected into the real callback: 2205
+    // frames (50 ms) never arrive. The take gets exactly 50 ms of silence at
+    // the logged position, and is 2205 frames longer than the audio that
+    // reached the callback (the meter counts every one of those frames).
+    if (device_ < 0) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    engine_->setInputGainDb(0.0);
+    const std::vector<int16_t> file = s16NeverSilent(size_t(3 * kRate));
+    QFile raw(infile_);
+    QVERIFY(raw.open(QIODevice::WriteOnly));
+    raw.write(reinterpret_cast<const char*>(file.data()), qint64(file.size() * sizeof(int16_t)));
+    raw.close();
+    std::string error;
+    if (!engine_->startRecording(device_, 2, kRate, error)) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    MeterBlock meter;
+    std::vector<MeterBlock> blocks;
+    auto drain = [&] {
+        engine_->capturedFrameCount();
+        blocks.clear();
+        engine_->drainMeterBlocks(blocks);
+        for (const MeterBlock& b : blocks) meter.merge(b);
+    };
+    QElapsedTimer timer;
+    timer.start();
+    bool injected = false;
+    while (timer.elapsed() < 150) {
+        if (!injected && engine_->capturedFrameCount() >= 4410) {
+            engine_->simulateInputOverflowForTesting(2205);
+            injected = true;
+        }
+        drain();
+        QThread::msleep(1);
+    }
+    engine_->stopRecording();
+    drain();
+    QVERIFY(injected);
+    const std::vector<float> take = engine_->copyCapturedBuffer();
+    const std::vector<LostInterval> lost = engine_->takeDropouts();
+    QCOMPARE(lost.size(), size_t(1));
+    QCOMPARE(lost[0].frames, int64_t(2205));
+    QCOMPARE(lost[0].causes, uint32_t(kDropoutInputOverflow));
+    QVERIFY(lost[0].startFrame >= 4410);
+    QVERIFY(int64_t(take.size() / 2) > lost[0].endFrame());
+    QCOMPARE(engine_->lostFrames(), int64_t(2205));
+    QCOMPARE(int64_t(take.size() / 2), meter.frames + 2205);
+    const QString problem = silenceMatchesIntervals(take, lost);
+    QVERIFY2(problem.isEmpty(), qPrintable(problem));
+}
+
+void TestCapture::realEngineRingOverrunIsPaddedInPlace() {
+    // A real ring overrun: the null device has no clock and delivers input
+    // far faster than real time, so not draining for a moment fills the
+    // 10 s capture ring. Each lost block becomes silence of the same length
+    // at its logged position, so the take is exactly as long as the input
+    // the callback received (every frame of it counted by the meter).
+    if (device_ < 0) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    engine_->setInputGainDb(0.0);
+    const std::vector<int16_t> file = s16NeverSilent(size_t(3 * kRate));
+    QFile raw(infile_);
+    QVERIFY(raw.open(QIODevice::WriteOnly));
+    raw.write(reinterpret_cast<const char*>(file.data()), qint64(file.size() * sizeof(int16_t)));
+    raw.close();
+    std::string error;
+    if (!engine_->startRecording(device_, 2, kRate, error)) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    MeterBlock meter;
+    std::vector<MeterBlock> blocks;
+    auto drainMeter = [&] {
+        blocks.clear();
+        engine_->drainMeterBlocks(blocks);
+        for (const MeterBlock& b : blocks) meter.merge(b);
+    };
+    QElapsedTimer timer;
+    timer.start();
+    while (engine_->lostFrames() == 0 && timer.elapsed() < 5000) {
+        drainMeter(); // the meter keeps up; the capture ring is left to fill
+        QThread::msleep(2);
+    }
+    const qint64 stalled = timer.elapsed();
+    while (timer.elapsed() < stalled + 50) {
+        engine_->capturedFrameCount(); // catch up
+        drainMeter();
+        QThread::msleep(1);
+    }
+    engine_->stopRecording();
+    drainMeter();
+    if (engine_->lostFrames() == 0) {
+        QSKIP("the capture device did not outrun the ring");
+    }
+    const std::vector<float> take = engine_->copyCapturedBuffer();
+    const std::vector<LostInterval> lost = engine_->takeDropouts();
+    QVERIFY(!lost.empty());
+    int64_t lostFrames = 0;
+    int64_t prevEnd = -1;
+    for (const LostInterval& iv : lost) {
+        QVERIFY(iv.frames > 0);
+        QCOMPARE(iv.causes, uint32_t(kDropoutRingOverrun));
+        QVERIFY(iv.startFrame > prevEnd);
+        prevEnd = iv.endFrame();
+        lostFrames += iv.frames;
+    }
+    QCOMPARE(lostFrames, engine_->lostFrames());
+    QVERIFY(lost.front().startFrame >= int64_t(9 * kRate)); // the ring held ~10 s before the first loss
+    QCOMPARE(int64_t(take.size() / 2), meter.frames);
+    const QString problem = silenceMatchesIntervals(take, lost);
+    QVERIFY2(problem.isEmpty(), qPrintable(problem));
 }
 
 QTEST_GUILESS_MAIN(TestCapture)
