@@ -1,5 +1,6 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QLabel>
 #include <QToolButton>
 #include <QMessageBox>
 #include <QProgressBar>
@@ -79,6 +80,7 @@ private slots:
     void recordingStopsPlayback();
     void inputGainDefaultsToZeroAndIsRemembered();
     void inputClipIndicatorLatchesPerTake();
+    void inputClipCountIsShownAndReportedAtStop();
     void clipSelectionIsDroppedWhenTracksChange();
     void rulerClickSeeksWhileStopped();
     void seekingAndAutoScrollDuringPlayback();
@@ -832,27 +834,64 @@ void TestGui::inputClipIndicatorLatchesPerTake() {
     record->click(); // creates and arms Track 1
     QVERIFY(fake->isRecording());
 
-    fake->setInputPeak(0.9f);
+    // A full-scale peak alone is not a clip: the light follows the engine's
+    // clip count (runs of full-scale samples), not the raw peak.
+    fake->setInputPeak(1.0f);
     window.tickForTest();
     QVERIFY(!led->property("lit").toBool());
-    fake->setInputPeak(kInputClipLevel);
+    fake->setInputClipStats({1, 3});
     window.tickForTest();
     QVERIFY(led->property("lit").toBool());
-    fake->setInputPeak(0.1f);
     window.tickForTest();
     QVERIFY(led->property("lit").toBool()); // latched
     led->click();
     QVERIFY(!led->property("lit").toBool());
+    window.tickForTest();
+    QVERIFY(!led->property("lit").toBool()); // no new clip since the click
 
-    fake->setInputPeak(1.0f);
+    fake->setInputClipStats({2, 7}); // a new clip relights it
     window.tickForTest();
     QVERIFY(led->property("lit").toBool());
     record->click(); // stop
-    // A new take starts dark, even with a stale peak left in the engine.
-    fake->setInputPeak(1.0f);
+    // A new take starts dark (the engine's count starts again from zero).
     record->click();
     QVERIFY(!led->property("lit").toBool());
     record->click();
+}
+
+void TestGui::inputClipCountIsShownAndReportedAtStop() {
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    auto* led = window.findChild<QToolButton*>("inputClip");
+    auto* status = window.findChild<QLabel*>("status");
+    QVERIFY(led != nullptr && status != nullptr);
+    QCOMPARE(led->text(), QString("INPUT CLIP"));
+
+    QPushButton* record = findButton(window, "●  RECORD");
+    record->click();
+    fake->setInputClipStats({2, 9});
+    window.tickForTest();
+    QCOMPARE(led->text(), QString::fromUtf8("INPUT CLIP \u00d72"));
+    QVERIFY(led->toolTip().contains("2 clips, 9 clipped samples"));
+
+    // Clips in the last moments before Stop (after the last tick) count too.
+    fake->setInputClipStats({3, 14});
+    fake->setCapturedBuffer(std::vector<float>(100, 0.1f));
+    findButton(window, "■  STOP")->click();
+    QCOMPARE(led->text(), QString::fromUtf8("INPUT CLIP \u00d73"));
+    QVERIFY(led->property("lit").toBool());
+    QVERIFY2(status->text().contains("the input clipped 3 times (14 samples)"), qPrintable(status->text()));
+    led->click(); // clears the light, keeps the take's count
+    QCOMPARE(led->text(), QString::fromUtf8("INPUT CLIP \u00d73"));
+
+    // A clean take says so plainly and resets the count.
+    record = findButton(window, "●  RECORD");
+    record->click();
+    QCOMPARE(led->text(), QString("INPUT CLIP"));
+    fake->setCapturedBuffer(std::vector<float>(100, 0.1f));
+    findButton(window, "■  STOP")->click();
+    QCOMPARE(status->text(), QString("Stopped"));
 }
 
 void TestGui::clipSelectionIsDroppedWhenTracksChange() {

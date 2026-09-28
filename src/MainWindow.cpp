@@ -163,12 +163,10 @@ void MainWindow::buildUi() {
     inputClipIndicator_->setObjectName("inputClip");
     inputClipIndicator_->setText("INPUT CLIP");
     inputClipIndicator_->setAutoRaise(false);
-    inputClipIndicator_->setToolTip("Lights when the input reaches full scale before any gain in zrecord: the "
-                                    "clipping is already in the signal. Lower the interface gain or the mic input "
-                                    "volume. Click to clear.");
     connect(inputClipIndicator_, &QToolButton::clicked, this, [this] { setInputClipLit(false); });
     micRow->addWidget(inputClipIndicator_);
     setInputClipLit(false);
+    showInputClipCount({});
     rootLayout->addLayout(micRow);
     connect(micVolumeSlider_, &QSlider::valueChanged, this, &MainWindow::onMicVolumeChanged);
     connect(deviceCombo_, &QComboBox::currentIndexChanged, this, [this](int) { onInputDeviceChanged(); });
@@ -368,6 +366,7 @@ void MainWindow::buildUi() {
     levelMeter_ = new PeakMeter();
     meterRow->addWidget(levelMeter_, 1);
     statusLabel_ = new QLabel("Ready");
+    statusLabel_->setObjectName("status");
     meterRow->addWidget(statusLabel_);
     rootLayout->addLayout(meterRow);
 
@@ -708,6 +707,35 @@ void MainWindow::setInputClipLit(bool lit) {
               " border: 1px solid #5a2d2d; border-radius: 3px; padding: 2px 6px; }");
 }
 
+void MainWindow::showInputClipCount(const InputClipStats& stats) {
+    // The count stays with the take (until the next one starts); clicking
+    // only turns the light off.
+    inputClipIndicator_->setText(stats.events > 0 ? QString("INPUT CLIP \u00d7%1").arg(stats.events)
+                                                  : QString("INPUT CLIP"));
+    QString tip = QString("Lights when the input clips before any gain in zrecord (%1 or more samples in a row "
+                          "at full scale): the clipping is already in the signal. Lower the interface gain or "
+                          "the mic input volume. Click to clear the light.")
+                      .arg(kClipRunLength);
+    if (stats.events > 0) {
+        tip += QString("\n\nThis take: %1 clip%2, %3 clipped samples.")
+                   .arg(stats.events)
+                   .arg(stats.events == 1 ? "" : "s")
+                   .arg(stats.samples);
+    }
+    inputClipIndicator_->setToolTip(tip);
+}
+
+void MainWindow::updateInputClip() {
+    const InputClipStats stats = engine_->inputClipStats();
+    if (stats.events > inputClipEventsSeen_) {
+        setInputClipLit(true); // latches until clicked or the next take
+    }
+    if (stats.events != inputClipEventsSeen_) {
+        inputClipEventsSeen_ = stats.events;
+        showInputClipCount(stats);
+    }
+}
+
 void MainWindow::onMicVolumeChanged(int value) {
     showMicVolume(value);
     QProcess::startDetached("pactl", {"set-source-volume", "@DEFAULT_SOURCE@", QString("%1%").arg(value)});
@@ -902,14 +930,17 @@ void MainWindow::onToggleRecord() {
             setControlsEnabled(true);
             trackPanel_->beginLiveCapture(armedIndex);
             recordingMuteButton_->setChecked(false); // startRecording() clears the engine's mute
-            engine_->takeInputPeak();              // a fresh take starts with a dark INPUT CLIP
+            engine_->takeInputPeak();
+            inputClipEventsSeen_ = 0; // a fresh take starts with a dark INPUT CLIP and no count
             setInputClipLit(false);
+            showInputClipCount({});
             recordingBar_->show();
         } else {
             QMessageBox::warning(this, "Recording failed", QString::fromStdString(error));
         }
     } else {
         engine_->stopRecording();
+        updateInputClip(); // clips in the last few milliseconds count too
         std::vector<float> captured = engine_->copyCapturedBuffer();
         trackPanel_->endLiveCapture();
         recordingBar_->hide();
@@ -927,7 +958,13 @@ void MainWindow::onToggleRecord() {
         }
         recordingArmedTrackIndex_ = -1;
         trackPanel_->refresh();
-        statusLabel_->setText("Stopped");
+        const InputClipStats clips = engine_->inputClipStats();
+        statusLabel_->setText(clips.events > 0
+                                  ? QString("Stopped \u2014 the input clipped %1 time%2 (%3 samples)")
+                                        .arg(clips.events)
+                                        .arg(clips.events == 1 ? "" : "s")
+                                        .arg(clips.samples)
+                                  : QString("Stopped"));
 
         recordButton_->setText("●  RECORD");
         recordButton_->setStyleSheet(
@@ -1762,9 +1799,7 @@ void MainWindow::onTick() {
     levelMeter_->setPeak(engine_->takeMeterPeak());
 
     if (engine_->isRecording()) {
-        if (engine_->takeInputPeak() >= kInputClipLevel) {
-            setInputClipLit(true); // latches until clicked or the next take
-        }
+        updateInputClip();
         double captured = engine_->capturedSeconds();
         statusLabel_->setText(QString("Recording... %1").arg(formatDuration(captured)));
 

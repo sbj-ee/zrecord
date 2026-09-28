@@ -64,6 +64,7 @@ public:
     double inputGainDb() const override;
     float takeMeterPeak() override;
     float takeInputPeak() override;
+    InputClipStats inputClipStats() const override;
     double capturedSeconds() const override;
     size_t capturedFrameCount() const;
 
@@ -129,6 +130,9 @@ private:
 
     std::atomic<float> meterPeak_{0.0f}; // max since the UI last took it
     std::atomic<float> inputPeak_{0.0f}; // raw input max since the UI last took it
+    ClipDetector inputClip_;             // audio thread while recording
+    std::atomic<int64_t> inputClipEvents_{0};
+    std::atomic<int64_t> inputClippedSamples_{0};
     std::atomic<double> inputGainDb_{0.0};
     std::atomic<float> inputGain_{1.0f}; // linear, read by the audio thread
     static void raisePeak(std::atomic<float>& target, float peak);
