@@ -8,6 +8,7 @@
 #include "AudioEngine.h"
 #include "Capture.h"
 #include "Filters.h"
+#include "Meter.h"
 
 using namespace zrecord;
 
@@ -63,12 +64,14 @@ private slots:
     void realEngineFlagsAFullScaleInput();
     void realEngineCleanFullScaleSineIsNotAClip();
     void realEngineMeterShowsTheRecordedLevel();
+    void realEngineMeterBlocksCarryRmsAndEveryFrame();
 
 private:
     // Records a short take of `infile` (S16 stereo at 44.1 kHz) through the
     // real engine. Returns false (and skips) if the device can't be opened.
     bool captureFromFile(const std::vector<int16_t>& samples, std::vector<float>& take, float& meterPeak,
                          float& inputPeak);
+    MeterBlock meter_; // everything the meter got during the last capture
     QTemporaryDir home_;
     QString infile_;
     std::unique_ptr<AudioEngine> engine_;
@@ -392,8 +395,6 @@ bool TestCapture::captureFromFile(const std::vector<int16_t>& samples, std::vect
         return false;
     }
     std::string error;
-    engine_->takeMeterPeak();
-    engine_->takeInputPeak();
     if (!engine_->startRecording(device_, 2, kRate, error)) {
         return false;
     }
@@ -403,13 +404,24 @@ bool TestCapture::captureFromFile(const std::vector<int16_t>& samples, std::vect
     timer.start();
     meterPeak = 0.0f;
     inputPeak = 0.0f;
+    meter_ = MeterBlock{};
+    std::vector<MeterBlock> blocks;
+    auto drain = [&] {
+        blocks.clear();
+        engine_->drainMeterBlocks(blocks);
+        for (const MeterBlock& b : blocks) meter_.merge(b);
+    };
     while (timer.elapsed() < 150) {
         engine_->capturedFrameCount();
-        meterPeak = std::max(meterPeak, engine_->takeMeterPeak());
-        inputPeak = std::max(inputPeak, engine_->takeInputPeak());
+        drain();
         QThread::msleep(2);
     }
     engine_->stopRecording();
+    drain(); // whatever the last callbacks published
+    for (int c = 0; c < meter_.channels; ++c) {
+        meterPeak = std::max(meterPeak, meter_.peak[c]);
+        inputPeak = std::max(inputPeak, meter_.inputPeak[c]);
+    }
     take = engine_->copyCapturedBuffer();
     return true;
 }
@@ -541,6 +553,29 @@ void TestCapture::realEngineMeterShowsTheRecordedLevel() {
     QCOMPARE(meter, peakOf(take));
     QVERIFY(meter > 1.0f); // i.e. the meter's CLIP light comes on
     QVERIFY(std::fabs(20.0 * std::log10(input) - -6.0) < 0.02);
+}
+
+void TestCapture::realEngineMeterBlocksCarryRmsAndEveryFrame() {
+    // The meter's blocks come from the real capture callback through the
+    // lock-free queue: per channel, a -6 dBFS sine reads 3.01 dB lower as
+    // RMS, and the blocks account for every frame that was recorded.
+    engine_->setInputGainDb(0.0);
+    std::vector<float> take;
+    float meter = 0.0f, input = 0.0f;
+    if (!captureFromFile(s16Sine(-6.0, size_t(3 * kRate)), take, meter, input)) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    QCOMPARE(meter_.channels, 2);
+    QCOMPARE(meter_.frames, int64_t(take.size() / 2));
+    for (int c = 0; c < 2; ++c) {
+        const double peakDb = linearToDb(meter_.peak[c]);
+        const double rmsDb = linearToDb(meter_.rms(c));
+        QVERIFY2(std::fabs(peakDb - -6.0) < 0.02, qPrintable(QString::number(peakDb)));
+        QVERIFY2(std::fabs(rmsDb - (peakDb - 3.0103)) < 0.02, qPrintable(QString("rms %1").arg(rmsDb)));
+        QVERIFY(!meter_.clipped[c]);
+        QCOMPARE(meter_.inputPeak[c], meter_.peak[c]); // 0 dB input gain
+    }
+    QVERIFY(meter_.lastSequence >= meter_.firstSequence);
 }
 
 QTEST_GUILESS_MAIN(TestCapture)

@@ -10,6 +10,7 @@
 #include "AudioEngineInterface.h"
 #include "Capture.h"
 #include "Filters.h"
+#include "Meter.h"
 #include "PlaybackMixer.h"
 #include "RingBuffer.h"
 #include "Project.h"
@@ -62,8 +63,7 @@ public:
 
     void setInputGainDb(double db) override;
     double inputGainDb() const override;
-    float takeMeterPeak() override;
-    float takeInputPeak() override;
+    size_t drainMeterBlocks(std::vector<MeterBlock>& out) override;
     InputClipStats inputClipStats() const override;
     double capturedSeconds() const override;
     size_t capturedFrameCount() const;
@@ -128,15 +128,21 @@ private:
     std::atomic<int64_t> seekRequest_{-1}; // UI -> audio thread; -1 = none
     std::atomic<bool> playbackFinished_{false}; // set by the audio thread at the end
 
-    std::atomic<float> meterPeak_{0.0f}; // max since the UI last took it
-    std::atomic<float> inputPeak_{0.0f}; // raw input max since the UI last took it
+    // One queue per callback thread, so each stays single-producer.
+    static constexpr size_t kMeterQueueBlocks = 512;
+    MeterQueue inputMeterQueue_;
+    MeterQueue outputMeterQueue_;
+    MeterFeed inputMeterFeed_;  // input callback
+    MeterFeed outputMeterFeed_; // output callback
+    // A last block the feed held back (queue full) when its stream stopped;
+    // handed out after the queue's contents. UI thread only.
+    MeterBlock inputMeterTail_;
+    MeterBlock outputMeterTail_;
     ClipDetector inputClip_;             // audio thread while recording
     std::atomic<int64_t> inputClipEvents_{0};
     std::atomic<int64_t> inputClippedSamples_{0};
     std::atomic<double> inputGainDb_{0.0};
     std::atomic<float> inputGain_{1.0f}; // linear, read by the audio thread
-    static void raisePeak(std::atomic<float>& target, float peak);
-    void raiseMeterPeak(float peak) { raisePeak(meterPeak_, peak); }
     std::atomic<bool> recording_{false};
     std::atomic<bool> inputMuted_{false};
 

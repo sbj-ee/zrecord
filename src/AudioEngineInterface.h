@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "Filters.h"
+#include "Meter.h"
 #include "Project.h"
 
 namespace zrecord {
@@ -62,14 +63,14 @@ public:
     virtual void setInputGainDb(double db) = 0;
     virtual double inputGainDb() const = 0;
 
-    // The largest |sample| since the previous call: while recording, what is
-    // written to the take (after input gain and the filter chain); while
-    // playing, the mixed output. Drives the level meter; taking the maximum
-    // since the last read means a clipped block between two UI ticks still
-    // registers.
-    virtual float takeMeterPeak() = 0;
-    // The largest raw input |sample| since the previous call, before any gain.
-    virtual float takeInputPeak() = 0;
+    // Level-meter blocks measured by the audio callbacks since the previous
+    // call, appended to `out` oldest first: while recording, what is written
+    // to the take (after input gain and the filter chain) plus the raw input
+    // peak before any gain; while playing, the mixed output. Each block has
+    // per-channel peak, sum of squares (for RMS) and clip flags, and none is
+    // dropped: if the UI falls behind, blocks are merged, never lost.
+    // Lock-free on both sides; call from the UI thread.
+    virtual size_t drainMeterBlocks(std::vector<MeterBlock>& out) = 0;
     // Clipping in the raw input (before any gain) during the current take, or
     // the last one once stopped. Starts again from zero with every take.
     virtual InputClipStats inputClipStats() const = 0;

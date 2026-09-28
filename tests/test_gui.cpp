@@ -93,6 +93,8 @@ private slots:
     void amplifySelectedClips();
     void peakMeterBallisticsAndHold();
     void peakMeterClipLedLatchesUntilClicked();
+    void peakMeterPaintsRmsPeakHoldAndInput();
+    void peakMeterRangeDecayAndInputTickAreRemembered();
     void mainWindowMetersPlayback();
     void repaintDoesNotWaitForTheProjectMutex();
     void aboutShowsTheBuildVersion();
@@ -1149,7 +1151,7 @@ void TestGui::peakMeterBallisticsAndHold() {
     QVERIFY(!meter.clipLit());
     // It bottoms out at the floor.
     meter.setPeakAt(0.0f, 60000);
-    QCOMPARE(meter.levelDb(), PeakMeter::kFloorDb);
+    QCOMPARE(meter.levelDb(), meter.floorDb());
 }
 
 void TestGui::peakMeterClipLedLatchesUntilClicked() {
@@ -1187,6 +1189,105 @@ void TestGui::mainWindowMetersPlayback() {
     QVERIFY(!meter->clipLit());
     fake->setMeterPeak(1.3f);
     QTRY_VERIFY(meter->clipLit());
+
+    // Stereo blocks from the engine give a bar per channel, RMS and peak
+    // (on a fresh window, so nothing is still falling from the levels above).
+    auto engine2 = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake2 = engine2.get();
+    MainWindow window2(std::move(engine2));
+    meter = window2.findChild<PeakMeter*>();
+    MeterBlock stereo = steadyMeterBlock(2, 0.5f, 0.5f / std::sqrt(2.0f));
+    stereo.peak[1] = 0.1f;
+    stereo.sumSquares[1] = 0.01 * double(stereo.frames); // RMS 0.1 (square)
+    fake2->pushMeterBlock(stereo);
+    window2.tickForTest();
+    QCOMPARE(meter->channelCount(), 2);
+    QVERIFY(std::fabs(meter->rmsDb(0) - -9.03f) < 0.01f);
+    QVERIFY(std::fabs(meter->peakDb(0) - -6.02f) < 0.01f);
+    QVERIFY(std::fabs(meter->rmsDb(1) - -20.0f) < 0.01f);
+}
+
+void TestGui::peakMeterPaintsRmsPeakHoldAndInput() {
+    // Left: sine at -6.02 dBFS peak (RMS -9.03). Right: -20 dBFS peak, RMS
+    // -26. The raw input (before gain) was 6 dB hotter on the left.
+    PeakMeter meter;
+    meter.resize(600, 50);
+    MeterBlock b = steadyMeterBlock(2, 0.5f, 0.5f / std::sqrt(2.0f));
+    b.peak[1] = 0.1f;
+    b.sumSquares[1] = 0.05 * 0.05 * double(b.frames);
+    b.inputPeak[0] = 1.0f;
+    b.inputPeak[1] = 0.2f;
+    meter.addBlocksAt({b}, 0);
+    QCOMPARE(meter.channelCount(), 2);
+    const QImage image = meter.grab().toImage();
+    const QColor background(30, 30, 30);
+
+    for (int c = 0; c < 2; ++c) {
+        const QRect row = meter.channelRect(c);
+        const int y = row.top() + 1; // upper half: clear of the input tick
+        const float peak = meter.peakDb(c), rms = meter.rmsDb(c);
+        auto at = [&](float db, int dx) { return image.pixelColor(meter.xForDb(db) + dx, y); };
+        // Solid (RMS) colour just below the RMS level...
+        QCOMPARE(at(rms, -2), PeakMeter::zoneColor(rms - 1.0f, false));
+        // ...the lighter peak colour between RMS and peak...
+        const float mid = (rms + peak) / 2.0f;
+        QCOMPARE(at(mid, 0), PeakMeter::zoneColor(mid, true));
+        // ...the blue hold tick at the peak, and nothing past it.
+        QCOMPARE(at(peak, 0), QColor(70, 160, 255));
+        QCOMPARE(at(peak, 4), background);
+    }
+    // The input tick (lower half of the row): cyan at 0 dBFS on the left.
+    const QRect left = meter.channelRect(0);
+    QCOMPARE(image.pixelColor(meter.xForDb(0.0f), left.bottom() - 1), QColor(0, 230, 255));
+    QVERIFY(image.pixelColor(meter.xForDb(0.0f), left.top() + 1) != QColor(0, 230, 255)); // only the lower half
+    // On the right the input was -14 dBFS.
+    const QRect right = meter.channelRect(1);
+    QCOMPARE(image.pixelColor(meter.xForDb(linearToDb(0.2)), right.bottom() - 1), QColor(0, 230, 255));
+    // Hidden when switched off.
+    meter.setShowInputTick(false);
+    const QImage noTick = meter.grab().toImage();
+    QVERIFY(noTick.pixelColor(meter.xForDb(0.0f), left.bottom() - 1) != QColor(0, 230, 255));
+
+    // Stereo rows don't overlap, and the bars end where their levels say.
+    QVERIFY(meter.channelRect(0).bottom() < meter.channelRect(1).top());
+    QVERIFY(meter.xForDb(-6.02f) > meter.xForDb(-9.03f));
+}
+
+void TestGui::peakMeterRangeDecayAndInputTickAreRemembered() {
+    QSettings().clear();
+    {
+        MainWindow window(std::make_unique<FakeAudioEngine>());
+        PeakMeter* meter = window.findChild<PeakMeter*>();
+        QCOMPARE(meter->floorDb(), -60.0f);
+        QCOMPARE(meter->decayDbPerSecond(), 24.0f);
+        QVERIFY(meter->showInputTick());
+        const int x60 = meter->xForDb(-60.0f);
+        QCOMPARE(PeakMeter::scaleMarks(-60.0f).front(), -60);
+
+        // The context-menu actions change and save the settings.
+        meter->findChild<QAction*>("meterRange96")->trigger();
+        meter->findChild<QAction*>("meterDecay48")->trigger();
+        meter->findChild<QAction*>("meterInputTick")->trigger();
+        QCOMPARE(meter->floorDb(), -96.0f);
+        QVERIFY(meter->xForDb(-60.0f) > x60); // -60 moves inward on a -96 scale
+        QCOMPARE(PeakMeter::scaleMarks(-96.0f).front(), -96);
+        QCOMPARE(meter->decayDbPerSecond(), 48.0f);
+        QVERIFY(!meter->showInputTick());
+        QVERIFY(meter->findChild<QAction*>("meterRange96")->isChecked());
+        QVERIFY(!meter->findChild<QAction*>("meterRange60")->isChecked());
+        QCOMPARE(QSettings().value("meter/floorDb").toFloat(), -96.0f);
+    }
+    {
+        MainWindow window(std::make_unique<FakeAudioEngine>());
+        PeakMeter* meter = window.findChild<PeakMeter*>();
+        QCOMPARE(meter->floorDb(), -96.0f);
+        QCOMPARE(meter->decayDbPerSecond(), 48.0f);
+        QVERIFY(!meter->showInputTick());
+        meter->findChild<QAction*>("meterRange48")->trigger();
+        QCOMPARE(meter->floorDb(), -48.0f);
+        QCOMPARE(meter->xForDb(-48.0f), meter->channelRect(0).left());
+    }
+    QSettings().clear();
 }
 
 void TestGui::repaintDoesNotWaitForTheProjectMutex() {

@@ -364,6 +364,20 @@ void MainWindow::buildUi() {
     // Level meter + track timeline.
     auto* meterRow = new QHBoxLayout();
     levelMeter_ = new PeakMeter();
+    {
+        // Meter preferences (right-click the meter) live in the settings, not
+        // the project: they're about how you like to watch levels.
+        QSettings settings;
+        levelMeter_->setFloorDb(settings.value(kMeterFloorKey, -60.0).toFloat());
+        levelMeter_->setDecayDbPerSecond(settings.value(kMeterDecayKey, 24.0).toFloat());
+        levelMeter_->setShowInputTick(settings.value(kMeterInputTickKey, true).toBool());
+    }
+    connect(levelMeter_, &PeakMeter::settingsChanged, this, [this] {
+        QSettings settings;
+        settings.setValue(kMeterFloorKey, levelMeter_->floorDb());
+        settings.setValue(kMeterDecayKey, levelMeter_->decayDbPerSecond());
+        settings.setValue(kMeterInputTickKey, levelMeter_->showInputTick());
+    });
     meterRow->addWidget(levelMeter_, 1);
     statusLabel_ = new QLabel("Ready");
     statusLabel_->setObjectName("status");
@@ -930,7 +944,6 @@ void MainWindow::onToggleRecord() {
             setControlsEnabled(true);
             trackPanel_->beginLiveCapture(armedIndex);
             recordingMuteButton_->setChecked(false); // startRecording() clears the engine's mute
-            engine_->takeInputPeak();
             inputClipEventsSeen_ = 0; // a fresh take starts with a dark INPUT CLIP and no count
             setInputClipLit(false);
             showInputClipCount({});
@@ -1796,7 +1809,9 @@ void MainWindow::onSelectionChanged() {
 
 void MainWindow::onTick() {
     // Input while recording, output while playing; otherwise it falls away.
-    levelMeter_->setPeak(engine_->takeMeterPeak());
+    meterBlocks_.clear(); // keeps its capacity: no allocation per tick once warm
+    engine_->drainMeterBlocks(meterBlocks_);
+    levelMeter_->addBlocks(meterBlocks_);
 
     if (engine_->isRecording()) {
         updateInputClip();
