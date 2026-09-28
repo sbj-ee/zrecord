@@ -8,6 +8,8 @@
 #include "AudioEngine.h"
 #include "Capture.h"
 #include "Meter.h"
+#include "AudioFileReader.h"
+#include "TakeFile.h"
 
 using namespace zrecord;
 
@@ -67,6 +69,8 @@ private slots:
     void realEngineMeterBlocksCarryRmsAndEveryFrame();
     void realEngineInjectedOverflowIsPaddedInPlace();
     void realEngineRingOverrunIsPaddedInPlace();
+    void realEngineStreamsTheTakeToItsFile();
+    void realEngineDiskFullKeepsThePartialTake();
 
 private:
     // Records a short take of `infile` (S16 stereo at 44.1 kHz) through the
@@ -105,6 +109,11 @@ void TestCapture::initTestCase() {
     raw.close();
     qputenv("HOME", home_.path().toUtf8());
     engine_ = std::make_unique<AudioEngine>(); // Pa_Initialize reads the config
+    // The null device captures hundreds of times faster than real time and
+    // fills the 10 s ring in a few milliseconds; drain it that often.
+    TakeWriter::Options writerOptions;
+    writerOptions.drainIntervalMs = 1;
+    engine_->setTakeWriterOptionsForTesting(writerOptions);
     for (const auto& device : engine_->listInputDevices()) {
         if (device.name == "default") {
             device_ = device.index;
@@ -701,8 +710,8 @@ void TestCapture::realEngineInjectedOverflowIsPaddedInPlace() {
 
 void TestCapture::realEngineRingOverrunIsPaddedInPlace() {
     // A real ring overrun: the null device has no clock and delivers input
-    // far faster than real time, so not draining for a moment fills the
-    // 10 s capture ring. Each lost block becomes silence of the same length
+    // far faster than real time, so pausing the take writer for a moment (a
+    // stalled disk) fills the 10 s capture ring. Each lost block becomes silence of the same length
     // at its logged position, so the take is exactly as long as the input
     // the callback received (every frame of it counted by the meter).
     if (device_ < 0) {
@@ -727,13 +736,14 @@ void TestCapture::realEngineRingOverrunIsPaddedInPlace() {
     };
     QElapsedTimer timer;
     timer.start();
+    engine_->pauseTakeWriterForTesting(true); // a stalled disk
     while (engine_->lostFrames() == 0 && timer.elapsed() < 5000) {
         drainMeter(); // the meter keeps up; the capture ring is left to fill
         QThread::msleep(2);
     }
     const qint64 stalled = timer.elapsed();
+    engine_->pauseTakeWriterForTesting(false); // catch up
     while (timer.elapsed() < stalled + 50) {
-        engine_->capturedFrameCount(); // catch up
         drainMeter();
         QThread::msleep(1);
     }
@@ -759,6 +769,92 @@ void TestCapture::realEngineRingOverrunIsPaddedInPlace() {
     QCOMPARE(int64_t(take.size() / 2), meter.frames);
     const QString problem = silenceMatchesIntervals(take, lost);
     QVERIFY2(problem.isEmpty(), qPrintable(problem));
+}
+
+void TestCapture::realEngineStreamsTheTakeToItsFile() {
+    // The take goes to disk as it's recorded: the file named for it holds
+    // exactly the take (a valid WAV any reader opens), and the finished take
+    // handed to the caller is that file's audio.
+    if (device_ < 0) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    engine_->setInputGainDb(0.0);
+    const QString takePath = home_.filePath("streamed.wav");
+    engine_->setNextTakePath(takePath.toStdString());
+    std::vector<float> take;
+    float meter = 0.0f, input = 0.0f;
+    if (!captureFromFile(s16NeverSilent(size_t(3 * kRate)), take, meter, input)) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    const TakeFileStatus status = engine_->takeFileStatus();
+    QCOMPARE(QString::fromStdString(status.path), takePath);
+    QVERIFY(!status.failed);
+    QCOMPARE(status.framesInMemory, int64_t(0));
+    QVERIFY(!take.empty());
+    QCOMPARE(status.framesOnDisk, int64_t(take.size() / 2));
+    QCOMPARE(int64_t(take.size() / 2), meter_.frames); // every frame the callback got
+    std::vector<float> onDisk;
+    int channels = 0, rate = 0;
+    std::string error;
+    QVERIFY(readTakeFile(takePath.toStdString(), onDisk, channels, rate, error));
+    QCOMPARE(channels, 2);
+    QCOMPARE(rate, int(kRate));
+    QVERIFY(onDisk == take);
+    QVERIFY(AudioFileReader::read(takePath.toStdString(), onDisk, rate, channels, error));
+    QVERIFY(onDisk == take);
+    QFile::remove(takePath);
+}
+
+void TestCapture::realEngineDiskFullKeepsThePartialTake() {
+    // The disk fills up one second into the take. The file keeps that second
+    // intact; what the callback captured after it is held in memory until
+    // the take is stopped (as the UI does at its next tick), so the finished
+    // take still has every frame -- nothing captured is lost.
+    if (device_ < 0) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    engine_->setInputGainDb(0.0);
+    const std::vector<int16_t> file = s16NeverSilent(size_t(3 * kRate));
+    QFile raw(infile_);
+    QVERIFY(raw.open(QIODevice::WriteOnly));
+    raw.write(reinterpret_cast<const char*>(file.data()), qint64(file.size() * sizeof(int16_t)));
+    raw.close();
+    const QString takePath = home_.filePath("full.wav");
+    engine_->setNextTakePath(takePath.toStdString());
+    engine_->simulateTakeWriteFailureAfterBytesForTesting(int64_t(kRate) * 2 * 4);
+    std::string error;
+    if (!engine_->startRecording(device_, 2, kRate, error)) {
+        QSKIP("ALSA file/null capture device unavailable");
+    }
+    MeterBlock meter;
+    std::vector<MeterBlock> blocks;
+    auto drain = [&] {
+        blocks.clear();
+        engine_->drainMeterBlocks(blocks);
+        for (const MeterBlock& b : blocks) meter.merge(b);
+    };
+    QElapsedTimer timer;
+    timer.start();
+    while (!engine_->takeFileStatus().failed && timer.elapsed() < 5000) {
+        drain();
+        QThread::msleep(1);
+    }
+    engine_->stopRecording();
+    drain();
+    const TakeFileStatus status = engine_->takeFileStatus();
+    QVERIFY(status.failed);
+    QVERIFY2(QString::fromStdString(status.error).contains("No space left on device"), status.error.c_str());
+    QCOMPARE(status.framesOnDisk, int64_t(kRate));
+    QCOMPARE(status.framesDropped, int64_t(0));
+    const std::vector<float> take = engine_->copyCapturedBuffer();
+    QCOMPARE(int64_t(take.size() / 2), meter.frames);
+    QCOMPARE(int64_t(take.size() / 2), status.framesOnDisk + status.framesInMemory);
+    std::vector<float> onDisk;
+    int channels = 0, rate = 0;
+    QVERIFY(readTakeFile(takePath.toStdString(), onDisk, channels, rate, error));
+    QCOMPARE(onDisk.size(), size_t(2 * kRate));
+    QVERIFY(std::equal(onDisk.begin(), onDisk.end(), take.begin())); // the file is the take's start
+    QFile::remove(takePath);
 }
 
 QTEST_GUILESS_MAIN(TestCapture)

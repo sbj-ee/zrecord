@@ -246,6 +246,7 @@ bool TakeWriter::start(RingBuffer* ring, const std::string& path, int channels, 
     tailFrames_.store(0);
     dropped_.store(0);
     drainCapacity_.store(0);
+    paused_.store(false);
     thread_ = std::thread([this] { run(); });
     return true;
 }
@@ -306,7 +307,9 @@ void TakeWriter::run() {
     while (!stopRequested_) {
         wake_.wait_for(lock, std::chrono::milliseconds(options_.drainIntervalMs), [this] { return stopRequested_; });
         lock.unlock();
-        drainOnce();
+        if (!paused_.load(std::memory_order_relaxed)) {
+            drainOnce();
+        }
         const auto now = Clock::now();
         if (!failed()) {
             if (now - lastSync >= std::chrono::milliseconds(options_.syncIntervalMs)) {

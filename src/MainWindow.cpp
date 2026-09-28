@@ -1795,14 +1795,8 @@ void MainWindow::onTick() {
             QString("font-weight: bold; color: %1;")
                 .arg(muted ? "#ffa000" : (blinkOn ? "#ff1744" : "#7a1226")));
 
-        std::vector<float> newSamples = engine_->consumeNewSamples();
-        if (!newSamples.empty()) {
-            float minVal = newSamples.front();
-            float maxVal = newSamples.front();
-            for (float sample : newSamples) {
-                minVal = std::min(minVal, sample);
-                maxVal = std::max(maxVal, sample);
-            }
+        float minVal = 0.0f, maxVal = 0.0f;
+        if (engine_->consumeLivePeak(minVal, maxVal)) {
             trackPanel_->pushLiveColumn(minVal, maxVal);
         }
     }

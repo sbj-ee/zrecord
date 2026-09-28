@@ -99,7 +99,7 @@ public:
     static constexpr double kMaxTailSeconds = 60.0;
 
     struct Options {
-        int drainIntervalMs = 20;   // how often the ring is emptied
+        int drainIntervalMs = 10;   // how often the ring is emptied
         int headerIntervalMs = 500; // how often the header's sizes are refreshed
         int syncIntervalMs = 2000;  // how often written data is fdatasync'd
     };
@@ -128,6 +128,9 @@ public:
     int64_t framesOnDisk() const { return framesOnDisk_.load(std::memory_order_relaxed); }
     int64_t tailFrames() const { return tailFrames_.load(std::memory_order_relaxed); }
     int64_t framesDroppedAfterFailure() const { return dropped_.load(std::memory_order_relaxed); }
+    // Tests: while paused the thread leaves the ring alone (to make it
+    // overrun on purpose). stop() drains regardless.
+    void setPausedForTesting(bool paused) { paused_.store(paused, std::memory_order_relaxed); }
     // The largest drain buffer used so far, in floats (for the memory tests).
     size_t drainBufferCapacity() const { return drainCapacity_.load(std::memory_order_relaxed); }
 
@@ -172,6 +175,7 @@ private:
     std::atomic<int64_t> tailFrames_{0};
     std::atomic<int64_t> dropped_{0};
     std::atomic<size_t> drainCapacity_{0};
+    std::atomic<bool> paused_{false};
 };
 
 } // namespace zrecord
