@@ -1,5 +1,6 @@
 #include "Project.h"
 
+#include "Capture.h"
 #include "Filters.h"
 
 #include <algorithm>
@@ -18,6 +19,10 @@ void PeakCache::build(const SampleBuffer& samples, int channels) {
     int64_t blockCount = (frameCount + kBlockFrames - 1) / kBlockFrames;
     auto blocks = std::make_shared<std::vector<MinMax>>(static_cast<size_t>(blockCount));
     std::vector<float> block(static_cast<size_t>(kBlockFrames) * static_cast<size_t>(channels));
+    // Per channel: the current run of full-scale samples and where it began,
+    // carried from block to block.
+    std::vector<int64_t> run(static_cast<size_t>(channels), 0);
+    std::vector<int64_t> runStart(static_cast<size_t>(channels), 0);
     for (int64_t b = 0; b < blockCount; ++b) {
         int64_t startFrame = b * kBlockFrames;
         int64_t endFrame = std::min(startFrame + kBlockFrames, frameCount);
@@ -29,6 +34,20 @@ void PeakCache::build(const SampleBuffer& samples, int channels) {
         for (int64_t f = 0; f < endFrame - startFrame; ++f) {
             for (int c = 0; c < channels; ++c) {
                 float s = block[static_cast<size_t>(f) * channels + c];
+                int64_t& r = run[static_cast<size_t>(c)];
+                if (!isFullScale(s)) {
+                    r = 0;
+                } else if (++r == 1) {
+                    runStart[static_cast<size_t>(c)] = startFrame + f;
+                } else if (r == kClipRunLength) {
+                    // Now known to be a clip: flag back to where the run began,
+                    // which may be in an earlier block.
+                    for (int64_t k = runStart[static_cast<size_t>(c)] / kBlockFrames; k <= b; ++k) {
+                        (*blocks)[static_cast<size_t>(k)].clipped = true;
+                    }
+                } else if (r > kClipRunLength) {
+                    (*blocks)[static_cast<size_t>(b)].clipped = true;
+                }
                 if (first) {
                     minValue = maxValue = s;
                     first = false;
@@ -38,7 +57,8 @@ void PeakCache::build(const SampleBuffer& samples, int channels) {
                 }
             }
         }
-        (*blocks)[static_cast<size_t>(b)] = {minValue, maxValue};
+        (*blocks)[static_cast<size_t>(b)].minValue = minValue;
+        (*blocks)[static_cast<size_t>(b)].maxValue = maxValue;
     }
     blocks_ = std::move(blocks);
     built_ = true;
@@ -54,6 +74,24 @@ PeakCache::MinMax PeakCache::blockAt(int64_t blockIndex) const {
         return {};
     }
     return (*blocks_)[static_cast<size_t>(blockIndex)];
+}
+
+bool isInClipRun(const SampleBuffer& samples, int channels, int64_t frame, int channel) {
+    if (channels <= 0 || channel < 0 || channel >= channels || frame < 0) {
+        return false;
+    }
+    const int64_t frames = static_cast<int64_t>(samples.size()) / channels;
+    auto fullScaleAt = [&](int64_t f) {
+        return f >= 0 && f < frames &&
+               isFullScale(samples[static_cast<size_t>(f) * static_cast<size_t>(channels) + static_cast<size_t>(channel)]);
+    };
+    if (!fullScaleAt(frame)) {
+        return false;
+    }
+    int64_t length = 1;
+    for (int64_t f = frame - 1; length < kClipRunLength && fullScaleAt(f); --f) ++length;
+    for (int64_t f = frame + 1; length < kClipRunLength && fullScaleAt(f); ++f) ++length;
+    return length >= kClipRunLength;
 }
 
 int64_t Track::endFrame() const {

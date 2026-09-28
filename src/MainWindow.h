@@ -205,6 +205,9 @@ private:
     // Click to clear; each new take starts it dark.
     QToolButton* inputClipIndicator_ = nullptr;
     void setInputClipLit(bool lit);
+    void showInputClipCount(const InputClipStats& stats);
+    void updateInputClip();
+    int64_t inputClipEventsSeen_ = 0; // this take's count at the last UI update
     void showMicVolume(int percent);
 
     QPushButton* recordButton_ = nullptr;

@@ -27,6 +27,7 @@ public:
         muted_ = false;
         lastRecordingDevice_ = deviceIndex;
         lastRecordingChannels_ = channels;
+        inputClip_ = {};
         return true;
     }
     int lastRecordingDevice() const { return lastRecordingDevice_; }
@@ -70,6 +71,8 @@ public:
     float takeMeterPeak() override { return std::exchange(meterPeak_, 0.0f); }
     float takeInputPeak() override { return std::exchange(inputPeak_, 0.0f); }
     void setInputPeak(float peak) { inputPeak_ = peak; }
+    InputClipStats inputClipStats() const override { return inputClip_; }
+    void setInputClipStats(InputClipStats stats) { inputClip_ = stats; }
     void setMeterPeak(float peak) { meterPeak_ = peak; }
     double capturedSeconds() const override { return 0.0; }
     std::vector<float> copyCapturedBuffer() const override { return captured_; }
@@ -84,6 +87,7 @@ public:
     int stopPlaybackCalls() const { return stopPlaybackCalls_; }
 
 private:
+    InputClipStats inputClip_;
     bool recording_ = false;
     bool playing_ = false;
     bool muted_ = false;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -7,6 +8,12 @@
 #include "Project.h"
 
 namespace zrecord {
+
+// Clipping found in the raw recording input (see ClipDetector in Capture.h).
+struct InputClipStats {
+    int64_t events = 0;  // runs of consecutive full-scale samples
+    int64_t samples = 0; // samples in those runs, all channels
+};
 
 struct AudioDeviceInfo {
     int index = -1;
@@ -61,9 +68,11 @@ public:
     // since the last read means a clipped block between two UI ticks still
     // registers.
     virtual float takeMeterPeak() = 0;
-    // The largest raw input |sample| since the previous call, before any
-    // gain: reaching kInputClipLevel means the input itself clipped.
+    // The largest raw input |sample| since the previous call, before any gain.
     virtual float takeInputPeak() = 0;
+    // Clipping in the raw input (before any gain) during the current take, or
+    // the last one once stopped. Starts again from zero with every take.
+    virtual InputClipStats inputClipStats() const = 0;
     virtual double capturedSeconds() const = 0;
     virtual std::vector<float> copyCapturedBuffer() const = 0;
     virtual std::vector<float> consumeNewSamples() = 0;

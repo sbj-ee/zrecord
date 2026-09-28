@@ -1,5 +1,6 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QLabel>
 #include <QToolButton>
 #include <QMessageBox>
 #include <QProgressBar>
@@ -79,6 +80,8 @@ private slots:
     void recordingStopsPlayback();
     void inputGainDefaultsToZeroAndIsRemembered();
     void inputClipIndicatorLatchesPerTake();
+    void inputClipCountIsShownAndReportedAtStop();
+    void clippedSamplesArePaintedRed();
     void clipSelectionIsDroppedWhenTracksChange();
     void rulerClickSeeksWhileStopped();
     void seekingAndAutoScrollDuringPlayback();
@@ -832,27 +835,118 @@ void TestGui::inputClipIndicatorLatchesPerTake() {
     record->click(); // creates and arms Track 1
     QVERIFY(fake->isRecording());
 
-    fake->setInputPeak(0.9f);
+    // A full-scale peak alone is not a clip: the light follows the engine's
+    // clip count (runs of full-scale samples), not the raw peak.
+    fake->setInputPeak(1.0f);
     window.tickForTest();
     QVERIFY(!led->property("lit").toBool());
-    fake->setInputPeak(kInputClipLevel);
+    fake->setInputClipStats({1, 3});
     window.tickForTest();
     QVERIFY(led->property("lit").toBool());
-    fake->setInputPeak(0.1f);
     window.tickForTest();
     QVERIFY(led->property("lit").toBool()); // latched
     led->click();
     QVERIFY(!led->property("lit").toBool());
+    window.tickForTest();
+    QVERIFY(!led->property("lit").toBool()); // no new clip since the click
 
-    fake->setInputPeak(1.0f);
+    fake->setInputClipStats({2, 7}); // a new clip relights it
     window.tickForTest();
     QVERIFY(led->property("lit").toBool());
     record->click(); // stop
-    // A new take starts dark, even with a stale peak left in the engine.
-    fake->setInputPeak(1.0f);
+    // A new take starts dark (the engine's count starts again from zero).
     record->click();
     QVERIFY(!led->property("lit").toBool());
     record->click();
+}
+
+void TestGui::inputClipCountIsShownAndReportedAtStop() {
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    auto* led = window.findChild<QToolButton*>("inputClip");
+    auto* status = window.findChild<QLabel*>("status");
+    QVERIFY(led != nullptr && status != nullptr);
+    QCOMPARE(led->text(), QString("INPUT CLIP"));
+
+    QPushButton* record = findButton(window, "●  RECORD");
+    record->click();
+    fake->setInputClipStats({2, 9});
+    window.tickForTest();
+    QCOMPARE(led->text(), QString::fromUtf8("INPUT CLIP \u00d72"));
+    QVERIFY(led->toolTip().contains("2 clips, 9 clipped samples"));
+
+    // Clips in the last moments before Stop (after the last tick) count too.
+    fake->setInputClipStats({3, 14});
+    fake->setCapturedBuffer(std::vector<float>(100, 0.1f));
+    findButton(window, "■  STOP")->click();
+    QCOMPARE(led->text(), QString::fromUtf8("INPUT CLIP \u00d73"));
+    QVERIFY(led->property("lit").toBool());
+    QVERIFY2(status->text().contains("the input clipped 3 times (14 samples)"), qPrintable(status->text()));
+    led->click(); // clears the light, keeps the take's count
+    QCOMPARE(led->text(), QString::fromUtf8("INPUT CLIP \u00d73"));
+
+    // A clean take says so plainly and resets the count.
+    record = findButton(window, "●  RECORD");
+    record->click();
+    QCOMPARE(led->text(), QString("INPUT CLIP"));
+    fake->setCapturedBuffer(std::vector<float>(100, 0.1f));
+    findButton(window, "■  STOP")->click();
+    QCOMPARE(status->text(), QString("Stopped"));
+}
+
+namespace {
+// Columns (x) of lane 0 that contain a clearly red pixel.
+std::vector<int> redColumns(const QImage& image, int laneTop) {
+    std::vector<int> xs;
+    for (int x = TrackPanel::kHeaderWidth; x < image.width(); ++x) {
+        for (int y = laneTop; y < laneTop + TrackPanel::kLaneHeight; ++y) {
+            const QColor c = image.pixelColor(x, y);
+            if (c.red() > 200 && c.green() < 110 && c.blue() < 110) {
+                xs.push_back(x);
+                break;
+            }
+        }
+    }
+    return xs;
+}
+} // namespace
+
+void TestGui::clippedSamplesArePaintedRed() {
+    // Track 1: quiet audio with a clipped stretch (frames 20000-20999 at full
+    // scale) and a lone full-scale peak at frame 10000, which is not a clip.
+    // Red that's there without the clip (the playhead) is subtracted.
+    panel_.resize(900, 400);
+    Clip& clip = project_.tracks[0].clips[0];
+    const Clip clean = clip;
+    for (double fpp : {100.0, 400.0}) { // per-sample columns, then summary blocks
+        panel_.setFramesPerPixelForTest(fpp);
+        clip = clean;
+        clip.samples.fill(10000, 1, -1.0f);
+        clip.peaks.build(clip.samples, 1);
+        panel_.refresh();
+        const std::vector<int> baseline = redColumns(panel_.grab().toImage(), TrackPanel::lanesTop());
+        clip.samples.fill(20000, 1000, 1.0f);
+        clip.peaks.build(clip.samples, 1);
+        panel_.refresh();
+        std::vector<int> red;
+        for (int x : redColumns(panel_.grab().toImage(), TrackPanel::lanesTop())) {
+            if (std::find(baseline.begin(), baseline.end(), x) == baseline.end()) red.push_back(x);
+        }
+        QVERIFY2(!red.empty(), qPrintable(QString("no red at %1 frames/px").arg(fpp)));
+        const int firstX = TrackPanel::kHeaderWidth + int(20000 / fpp);
+        const int lastX = TrackPanel::kHeaderWidth + int(21000 / fpp);
+        // Summary blocks are 256 frames, so allow one block of slack there.
+        const int slack = fpp >= 256.0 ? int(std::ceil(256.0 / fpp)) + 1 : 1;
+        QVERIFY2(red.front() >= firstX - slack && red.back() <= lastX + slack,
+                 qPrintable(QString("red spans x %1-%2, clip is %3-%4 at %5 frames/px")
+                                .arg(red.front()).arg(red.back()).arg(firstX).arg(lastX).arg(fpp)));
+        QVERIFY(int(red.size()) >= (lastX - firstX) - 1); // the whole stretch
+        // The lone peak is not red, with or without the clip elsewhere.
+        const int peakX = TrackPanel::kHeaderWidth + int(10000 / fpp);
+        QVERIFY(std::find(red.begin(), red.end(), peakX) == red.end());
+        QVERIFY(std::find(baseline.begin(), baseline.end(), peakX) == baseline.end());
+    }
 }
 
 void TestGui::clipSelectionIsDroppedWhenTracksChange() {

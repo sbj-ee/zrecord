@@ -71,6 +71,9 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
     }
     captureBuffer_.clear();
     consumedOffset_ = 0;
+    inputClip_.reset(channels_);
+    inputClipEvents_.store(0, std::memory_order_relaxed);
+    inputClippedSamples_.store(0, std::memory_order_relaxed);
 
     // Ten seconds of headroom: the UI drains every 50 ms, so this only runs
     // out if the UI thread is wedged, and then the overrun flag reports it.
@@ -278,6 +281,10 @@ float AudioEngine::takeInputPeak() {
     return inputPeak_.exchange(0.0f, std::memory_order_relaxed);
 }
 
+InputClipStats AudioEngine::inputClipStats() const {
+    return {inputClipEvents_.load(std::memory_order_relaxed), inputClippedSamples_.load(std::memory_order_relaxed)};
+}
+
 void AudioEngine::raisePeak(std::atomic<float>& target, float peak) {
     // Lock-free max; called from the audio callbacks.
     float current = target.load(std::memory_order_relaxed);
@@ -359,7 +366,9 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
         // Input gain, then the filter chain. The meter follows what is
         // recorded, so gain or an effect that pushes the take past full scale
         // shows up (and lights CLIP) instead of hiding behind the raw level.
-        const CapturePeaks block = processCaptureBlock(scratch_, frames, channels_, gain, filterChain_);
+        // The raw input is also checked for clipping (runs of full-scale
+        // samples, carried across callbacks) before the gain touches it.
+        const CapturePeaks block = processCaptureBlock(scratch_, frames, channels_, gain, filterChain_, &inputClip_);
         peaks.input = std::max(peaks.input, block.input);
         peaks.recorded = std::max(peaks.recorded, block.recorded);
         captureRing_.write(scratch_.data(), count);
@@ -367,6 +376,8 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
 
     raiseMeterPeak(peaks.recorded);
     raisePeak(inputPeak_, peaks.input);
+    inputClipEvents_.store(inputClip_.events(), std::memory_order_relaxed);
+    inputClippedSamples_.store(inputClip_.clippedSamples(), std::memory_order_relaxed);
     return paContinue;
 }
 
