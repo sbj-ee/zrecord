@@ -45,6 +45,23 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Mic volume above 100% is flagged.** The percentage turns amber, and its
   tooltip explains that the system is boosting the input in software, which
   easily clips a loud source before zrecord receives it.
+- **RMS and peak per channel in the level meter.** Stereo shows one row per
+  channel (L and R). Each row has a solid bar for the RMS (average) level,
+  a lighter bar out to the peak, and a peak-hold tick that stays for 1.5 s
+  and then falls. The number beside the meter is the highest held peak. It
+  still shows what is recorded (after input gain and live filters), or the
+  playback mix.
+- **Input level tick (optional).** While recording, a small cyan tick in
+  each row shows the input level before input gain, so you can see how
+  much the gain adds.
+- **Meter settings.** Right-click the meter to set the range (-48, -60 or
+  -96 dB), the decay speed (12, 24 or 48 dB/s) and the input tick, or to
+  reset peak hold and CLIP. The settings are remembered.
+- **Smoother, exact metering.** The audio callback sends the peak, RMS and
+  clip data for every buffer to the meter through a lock-free queue. The
+  callback never allocates or locks. If the display falls behind, buffers
+  are merged, never dropped, so short peaks and clips always reach the
+  meter.
 
 ## [1.1.1] - 2026-09-25
 

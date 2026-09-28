@@ -5,7 +5,18 @@
 
 namespace zrecord {
 
+namespace {
+void discardMeterBlocks(MeterQueue& queue) {
+    MeterBlock block;
+    while (queue.tryPop(block)) {
+    }
+}
+} // namespace
+
 AudioEngine::AudioEngine() {
+    // The meter queues are allocated once, here: the callbacks never allocate.
+    inputMeterQueue_.reset(kMeterQueueBlocks);
+    outputMeterQueue_.reset(kMeterQueueBlocks);
     // A failure here used to go unnoticed and surface later as empty device
     // lists and puzzling errors; keep it and report it where it matters.
     PaError err = Pa_Initialize();
@@ -71,6 +82,9 @@ bool AudioEngine::startRecording(int deviceIndex, int channels, double sampleRat
     }
     captureBuffer_.clear();
     consumedOffset_ = 0;
+    inputMeterFeed_.reset(channels_);
+    discardMeterBlocks(inputMeterQueue_); // nothing stale from a previous take
+    inputMeterTail_ = MeterBlock{};
     inputClip_.reset(channels_);
     inputClipEvents_.store(0, std::memory_order_relaxed);
     inputClippedSamples_.store(0, std::memory_order_relaxed);
@@ -117,10 +131,11 @@ void AudioEngine::stopRecording() {
         Pa_StopStream(inputStream_);
         Pa_CloseStream(inputStream_);
         inputStream_ = nullptr;
+        // The callback can't run any more, so its feed is ours now.
+        MeterBlock tail;
+        if (inputMeterFeed_.takePending(tail)) inputMeterTail_.merge(tail);
     }
     recording_ = false;
-    meterPeak_.store(0.0f, std::memory_order_relaxed);
-    inputPeak_.store(0.0f, std::memory_order_relaxed);
 }
 
 bool AudioEngine::isRecording() const {
@@ -166,6 +181,9 @@ bool AudioEngine::startPlayback(Project& project, std::string& errorMessage) {
     playbackPos_ = static_cast<size_t>(std::max<int64_t>(0, project.playheadFrame));
     playbackFrame_.store(static_cast<int64_t>(playbackPos_));
     playbackChannels_ = project.channels;
+    outputMeterFeed_.reset(playbackChannels_); // the old stream is closed above
+    discardMeterBlocks(outputMeterQueue_);
+    outputMeterTail_ = MeterBlock{};
     playbackFinished_.store(false);
     mixer_.publish(PlaybackSnapshot::capture(project));
     outputParams.channelCount = project.channels;
@@ -202,6 +220,8 @@ void AudioEngine::stopPlayback() {
         Pa_StopStream(outputStream_);
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
+        MeterBlock tail;
+        if (outputMeterFeed_.takePending(tail)) outputMeterTail_.merge(tail);
     }
     int64_t pendingSeek = seekRequest_.exchange(-1);
     if (pendingSeek >= 0) {
@@ -273,23 +293,26 @@ double AudioEngine::inputGainDb() const {
     return inputGainDb_.load(std::memory_order_relaxed);
 }
 
-float AudioEngine::takeMeterPeak() {
-    return meterPeak_.exchange(0.0f, std::memory_order_relaxed);
-}
-
-float AudioEngine::takeInputPeak() {
-    return inputPeak_.exchange(0.0f, std::memory_order_relaxed);
+size_t AudioEngine::drainMeterBlocks(std::vector<MeterBlock>& out) {
+    // Recording and playback don't overlap, so at most one of these has
+    // anything in it; draining both keeps the order within each.
+    size_t n = drainMeterQueue(inputMeterQueue_, out);
+    if (!inputMeterTail_.empty()) {
+        out.push_back(inputMeterTail_);
+        inputMeterTail_ = MeterBlock{};
+        ++n;
+    }
+    n += drainMeterQueue(outputMeterQueue_, out);
+    if (!outputMeterTail_.empty()) {
+        out.push_back(outputMeterTail_);
+        outputMeterTail_ = MeterBlock{};
+        ++n;
+    }
+    return n;
 }
 
 InputClipStats AudioEngine::inputClipStats() const {
     return {inputClipEvents_.load(std::memory_order_relaxed), inputClippedSamples_.load(std::memory_order_relaxed)};
-}
-
-void AudioEngine::raisePeak(std::atomic<float>& target, float peak) {
-    // Lock-free max; called from the audio callbacks.
-    float current = target.load(std::memory_order_relaxed);
-    while (peak > current && !target.compare_exchange_weak(current, peak, std::memory_order_relaxed)) {
-    }
 }
 
 double AudioEngine::capturedSeconds() const {
@@ -352,12 +375,12 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
     const size_t sliceFrames = scratch_.size() / channels;
     const bool muted = input == nullptr || inputMuted_.load(std::memory_order_relaxed);
     const float gain = inputGain_.load(std::memory_order_relaxed);
-    CapturePeaks peaks;
     for (size_t done = 0; done < frameCount && sliceFrames > 0; done += sliceFrames) {
         const size_t frames = std::min(sliceFrames, static_cast<size_t>(frameCount) - done);
         const size_t count = frames * channels;
         if (!muted) {
             std::copy(input + done * channels, input + done * channels + count, scratch_.begin());
+            inputMeterFeed_.addInput(scratch_.data(), frames); // the raw input, before any gain
         } else {
             // A muted take still advances (so timing stays intact) but records
             // silence, and the level meter correctly reads zero.
@@ -368,14 +391,12 @@ int AudioEngine::handleInput(const float* input, unsigned long frameCount) {
         // shows up (and lights CLIP) instead of hiding behind the raw level.
         // The raw input is also checked for clipping (runs of full-scale
         // samples, carried across callbacks) before the gain touches it.
-        const CapturePeaks block = processCaptureBlock(scratch_, frames, channels_, gain, filterChain_, &inputClip_);
-        peaks.input = std::max(peaks.input, block.input);
-        peaks.recorded = std::max(peaks.recorded, block.recorded);
+        processCaptureBlock(scratch_, frames, channels_, gain, filterChain_, &inputClip_);
+        inputMeterFeed_.addSignal(scratch_.data(), frames); // what the take gets
         captureRing_.write(scratch_.data(), count);
     }
 
-    raiseMeterPeak(peaks.recorded);
-    raisePeak(inputPeak_, peaks.input);
+    inputMeterFeed_.publish(inputMeterQueue_);
     inputClipEvents_.store(inputClip_.events(), std::memory_order_relaxed);
     inputClippedSamples_.store(inputClip_.clippedSamples(), std::memory_order_relaxed);
     return paContinue;
@@ -389,12 +410,8 @@ int AudioEngine::handleOutput(float* output, unsigned long frameCount) {
         playbackPos_ = static_cast<size_t>(seek);
     }
     bool more = mixer_.render(static_cast<int64_t>(playbackPos_), output, frameCount, playbackChannels_);
-    float peak = 0.0f;
-    const size_t samples = static_cast<size_t>(frameCount) * static_cast<size_t>(playbackChannels_);
-    for (size_t i = 0; i < samples; ++i) {
-        peak = std::max(peak, std::fabs(output[i]));
-    }
-    raiseMeterPeak(peak);
+    outputMeterFeed_.addSignal(output, frameCount);
+    outputMeterFeed_.publish(outputMeterQueue_);
     playbackPos_ += frameCount;
     playbackFrame_.store(static_cast<int64_t>(playbackPos_), std::memory_order_relaxed);
     if (!more) {

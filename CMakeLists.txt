@@ -60,6 +60,7 @@ add_library(zrecord_core STATIC
     src/AudioEngine.cpp
     src/Filters.cpp
     src/Capture.cpp
+    src/Meter.cpp
     src/Fft.cpp
     src/AudioFileWriter.cpp
     src/AudioFileReader.cpp

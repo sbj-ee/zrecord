@@ -159,15 +159,21 @@ void TestAudioEngine::playbackFeedsTheMeter() {
     Project project;
     fill(project, 4410); // 0.1 amplitude
     project.tracks[0].clips[0].samples.fill(100, 1, -0.8f);
-    engine_->takeMeterPeak(); // drop anything left over
     std::string error;
     if (!engine_->startPlayback(project, error)) {
         QSKIP(qPrintable(QString("no usable output device: %1").arg(QString::fromStdString(error))));
     }
     QVERIFY(waitUntilIdle(*engine_));
     engine_->stopPlayback();
-    QCOMPARE(engine_->takeMeterPeak(), 0.8f); // the loudest sample, even if brief
-    QCOMPARE(engine_->takeMeterPeak(), 0.0f); // taken
+    std::vector<MeterBlock> blocks;
+    engine_->drainMeterBlocks(blocks);
+    QVERIFY(!blocks.empty());
+    MeterBlock all;
+    for (const MeterBlock& b : blocks) all.merge(b);
+    QCOMPARE(all.peak[0], 0.8f); // the loudest sample, even if brief
+    QVERIFY(!all.clipped[0]);    // one sample at 0.8 is nowhere near
+    blocks.clear();
+    QCOMPARE(engine_->drainMeterBlocks(blocks), size_t(0)); // taken
 }
 
 QTEST_GUILESS_MAIN(TestAudioEngine)

@@ -68,12 +68,24 @@ public:
 
     void setInputGainDb(double db) override { inputGainDb_ = db; }
     double inputGainDb() const override { return inputGainDb_; }
-    float takeMeterPeak() override { return std::exchange(meterPeak_, 0.0f); }
-    float takeInputPeak() override { return std::exchange(inputPeak_, 0.0f); }
-    void setInputPeak(float peak) { inputPeak_ = peak; }
+    size_t drainMeterBlocks(std::vector<MeterBlock>& out) override {
+        const size_t n = meterBlocks_.size();
+        out.insert(out.end(), meterBlocks_.begin(), meterBlocks_.end());
+        meterBlocks_.clear();
+        return n;
+    }
+    // Queue a block for the meter's next tick.
+    void pushMeterBlock(const MeterBlock& block) { meterBlocks_.push_back(block); }
+    // A steady mono level (RMS = peak), with the raw input at the same level.
+    void setMeterPeak(float peak) { pushMeterBlock(steadyMeterBlock(1, peak, peak)); }
+    // Just the raw input before gain (nothing recorded yet).
+    void setInputPeak(float peak) {
+        MeterBlock b = steadyMeterBlock(1, 0.0f, 0.0f);
+        b.inputPeak[0] = peak;
+        pushMeterBlock(b);
+    }
     InputClipStats inputClipStats() const override { return inputClip_; }
     void setInputClipStats(InputClipStats stats) { inputClip_ = stats; }
-    void setMeterPeak(float peak) { meterPeak_ = peak; }
     double capturedSeconds() const override { return 0.0; }
     std::vector<float> copyCapturedBuffer() const override { return captured_; }
     std::vector<float> consumeNewSamples() override { return {}; }
@@ -100,8 +112,7 @@ private:
     int refreshCalls_ = 0;
     int64_t playbackFrame_ = 0;
     int64_t lastSeek_ = -1;
-    float meterPeak_ = 0.0f;
-    float inputPeak_ = 0.0f;
+    std::vector<MeterBlock> meterBlocks_;
     double inputGainDb_ = 0.0;
     FilterSettings settings_;
     std::vector<float> captured_;

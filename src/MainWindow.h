@@ -168,6 +168,9 @@ private:
     static constexpr const char* kRecentProjectsKey = "recentProjects";
     static constexpr const char* kGeometryKey = "mainWindow/geometry";
     static constexpr const char* kInputGainKey = "input/gainDb";
+    static constexpr const char* kMeterFloorKey = "meter/floorDb";
+    static constexpr const char* kMeterDecayKey = "meter/decayDbPerSecond";
+    static constexpr const char* kMeterInputTickKey = "meter/showInputTick";
     void updateWindowTitle();
 
     Project project_;
@@ -273,6 +276,7 @@ private:
     QToolButton* recordingMuteButton_ = nullptr;
 
     class PeakMeter* levelMeter_ = nullptr;
+    std::vector<MeterBlock> meterBlocks_; // reused every tick
     QLabel* statusLabel_ = nullptr;
     TrackPanel* trackPanel_ = nullptr;
 
