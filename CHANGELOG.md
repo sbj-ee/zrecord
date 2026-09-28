@@ -7,6 +7,31 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Recording keeps the raw input; effects moved to playback.** A take is
+  now exactly what the input delivers, with only Input gain applied. The
+  live Filters panel is gone. Its effects (Gain, High-pass, Low-pass,
+  Noise gate, Compressor, Robot, Echo, Deep Voice, Chipmunk, Distortion,
+  Limiter) are now a per-track, non-destructive effect stack. It is applied
+  when the track is played or exported, and you can change or remove it
+  after recording. Each track header has an **FX** button (lit while the
+  track has an active effect) that opens the track's effects dialog.
+- **Effects are not heard while recording.** zrecord never monitored the
+  input through the speakers, so the live chain was only ever audible in
+  the finished take. Now you hear a track's effects when you play it back.
+- **Input gain is the only gain on the way in.** The capture-side Gain
+  effect duplicated it and has been removed. Gain is still available as a
+  playback effect in a track's stack.
+- **Ctrl+R is now Tracks > Apply Track Effects.** It renders ("bakes") the
+  selected track's effect stack into its audio and clears the stack, as one
+  undo step. Without a selection it uses the armed track, or the only
+  track. It replaces Edit > Apply Filters to Selection, which ran the
+  panel's settings over a selection. To process only part of a track, split
+  that part onto its own track or bake and then edit.
+- The level meter still shows the recorded level (after Input gain) while
+  recording. During playback it shows the mix after every track's effects.
+
 ### Fixed
 
 - **The level meter now shows what is recorded.** While recording it
@@ -14,15 +39,40 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   at +12 dB, a -6 dBFS input was recorded at +6 dBFS (hard-clipped on
   playback and export) while the meter read -6 dBFS and CLIP stayed dark.
   Echo's extra ~5 dB went unseen the same way. The meter and its CLIP light
-  now follow the take itself, after input gain and the filter chain. At the
+  now follow the take itself, after input gain. At the
   default settings the capture path is exactly unity gain, as before; that
   is now covered by tests, including real PortAudio captures at -12, -6 and
   0 dBFS.
 
 ### Added
 
+- **Per-track effect stacks.** Each track has an ordered list of effects,
+  each with its own parameters and a bypass check box. The **FX** button (or
+  Tracks > Track Effects...) opens a dialog where you can add, remove,
+  reorder and bypass effects and edit their parameters. Changes are heard
+  immediately if the project is playing. Closing with OK makes the whole
+  edit one undo step, and Cancel puts the stack back. **Apply to Audio**
+  bakes the stack into the clips.
+- Effects are processed in the audio callback without allocating or
+  locking. Parameter changes reach playback through atomics, so turning a
+  knob keeps the echo tail and the gate state. Adding, removing or
+  reordering builds a new stack off the audio thread, and the old one is
+  freed on the UI thread.
+- Stacks are saved in the project file (`"effects"` on each track).
+  Projects from earlier versions load with empty stacks. Older versions of
+  zrecord ignore the stacks when they open a newer project, and drop them
+  if they save it.
+- Export Mixdown includes every track's effects. So does playback started
+  from the beginning, matching the export sample for sample. Playback
+  started mid-project starts the effects from rest, so an echo from before
+  that point isn't heard. Baking renders the track from its start. An echo
+  tail that runs past the track's last clip, or into a gap between clips,
+  is heard on playback and export (up to the end of the project, where
+  both stop) but cut off by baking, which only
+  rewrites existing clip audio.
+
 - **Input gain** (next to the mic volume): a digital gain in dB applied to
-  the recording before the filters. The default, 0 dB, records exactly what
+  the recording, the only processing a take gets. The default, 0 dB, records exactly what
   the input delivers. It is remembered between sessions.
 - **INPUT CLIP light.** It comes on when the input itself clips before any
   gain in zrecord (the clipping is already in the signal: lower the

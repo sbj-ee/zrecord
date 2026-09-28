@@ -1,6 +1,6 @@
 # zrecord
 
-A Qt6 multi-track audio recorder and editor for Linux, with a live input filter chain, voice effects, and export to multiple formats.
+A Qt6 multi-track audio recorder and editor for Linux, with per-track effect stacks (filters, dynamics and voice effects), and export to multiple formats.
 
 ## Features
 
@@ -11,11 +11,11 @@ A Qt6 multi-track audio recorder and editor for Linux, with a live input filter 
 - Import existing audio files (WAV, FLAC, OGG, AIFF, ...) onto a track, resampled to the project rate
 - Save/open a project (tracks, clips, and their timeline positions) as a `*.zrproj` folder; reopening restores it exactly, and saving is atomic
 - Mic input volume control (adjusts the system source volume via PipeWire/PulseAudio; flagged above 100%), a digital input gain in dB (default 0 dB), and an INPUT CLIP light (with a per-take count) for input that is already clipped: 3+ consecutive full-scale samples, so a single loud peak doesn't count
-- Live filter chain applied while recording: gain, high-pass, low-pass, noise gate (with attack/release), compressor, limiter
-- Selectable voice effects: Robot Voice, Echo, Deep Voice, Chipmunk, Distortion
+- Records the raw input: a take is exactly what the device delivers, with only the input gain applied
+- Per-track, non-destructive effect stacks applied on playback and export: gain, high-pass, low-pass, noise gate (with attack/release), compressor, limiter, and the Robot, Echo, Deep Voice, Chipmunk and Distortion voice effects. The track's FX button opens a dialog to add, remove, reorder, bypass and adjust them, heard live while playing; stacks are saved with the project, and Apply Track Effects (Ctrl+R) bakes a stack into the audio as one undo step
 - Voice Changer (Edit menu): pitch shift in semitones that keeps the length, with an independent formant control, Deeper/Higher/Robot/Chipmunk/Custom presets, and a Preview before Apply (one undo step)
 - Playback of the mixed project with a moving playhead; click the ruler to seek, stopped or playing
-- dB level meter per channel: RMS bar, peak bar, peak hold with readout and a latching clip light, plus an optional input (pre-gain) tick; range and decay are set from its right-click menu. It shows what is being recorded (after input gain and live filters), or the playback mix
+- dB level meter per channel: RMS bar, peak bar, peak hold with readout and a latching clip light, plus an optional input (pre-gain) tick; range and decay are set from its right-click menu. It shows what is being recorded (after input gain), or the playback mix after track effects
 - Clipped audio (runs of full-scale samples) is painted red in the waveform
 - Dropout detection: input lost while recording (a driver overflow, or zrecord falling behind) is filled with silence of the same length, so the rest of the take stays in sync, and marked with a "Dropout 12 ms" label; the status bar gives the count and total lost after Stop
 - Export a mixdown to WAV, FLAC, OGG Vorbis, or MP3 (all via libsndfile)
@@ -56,7 +56,7 @@ Every shortcut is also listed next to its entry in the menus.
 | Ctrl+X / Ctrl+C / Ctrl+V | Cut / Copy / Paste (at the playhead) |
 | Delete | Delete the selection |
 | Ctrl+L | Silence the selection |
-| Ctrl+R | Apply the filter settings to the selection |
+| Ctrl+R | Apply the selected (or armed) track's effects to its audio |
 | Ctrl+B | Add a label (selection, or playhead) |
 | Ctrl+Shift+N / Ctrl+Shift+W | Add / remove a track |
 
@@ -131,6 +131,8 @@ zrecord is released under the [MIT License](LICENSE). Copyright (c) 2026 Stephen
 The .deb links dynamically against the system's libraries, each under its own license (shipped in its own package): Qt 6 (LGPL-3.0), PortAudio (MIT-style), libsndfile (LGPL-2.1-or-later) and libsamplerate (BSD-2-Clause). Nothing third-party is bundled or statically linked; the FFT and the voice changer DSP are zrecord's own code. If you redistribute zrecord with Qt or libsndfile bundled or linked statically (e.g. an AppImage), you must then meet their LGPL terms.
 
 ## Notes
+
+- Effects are heard on playback, not while recording: zrecord doesn't monitor the input through the speakers, and a take is recorded raw so its effects can still be changed afterwards. The FX button is lit on any track whose playback differs from its waveform.
 
 - If a take shows "Dropout" labels, input was lost there and replaced with silence (so the rest stays in time). Frequent dropouts usually mean the system is overloaded or the audio device's buffer is too small for it.
 - If recording or playback seems stalled or silent, check your system's mic input volume/mute state (e.g. via `wpctl status` or your desktop's sound settings) before assuming it's an app bug.
