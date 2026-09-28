@@ -4,7 +4,18 @@
 #include "MainWindow.h"
 #include "zrecord_version.h"
 
+#include <cstdio>
+#include <cstring>
+
 int main(int argc, char** argv) {
+    // Before QApplication, so it works without a display (e.g. to check an
+    // installed package).
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--version") == 0) {
+            std::printf("zrecord %s\n", ZRECORD_VERSION);
+            return 0;
+        }
+    }
     QApplication app(argc, argv);
     QApplication::setApplicationName("zrecord");
     // QSettings (recent projects, window geometry) lives in

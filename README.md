@@ -114,7 +114,7 @@ This produces `build/zrecord_<version>_amd64.deb`. Packaging stops with an error
 sudo apt install ./build/zrecord_*_amd64.deb
 ```
 
-Builds from anything other than the release tag are versioned `<version>+g<commit>` (for example `1.1.1+g1a2b3c4`), in the package and in Help > About; configure with `-DZRECORD_RELEASE=ON` for a plain version. Pushing a `v<version>` tag runs the release workflow, which builds, tests and attaches the `.deb` to a GitHub Release.
+Builds from anything other than the release tag are versioned `<version>+g<commit>` (for example `1.2.0+g1a2b3c4`), in the package, in Help > About and in `zrecord --version`; configure with `-DZRECORD_RELEASE=ON` for a plain version. Pushing a `v<version>` tag runs the release workflow, which builds, tests and attaches the `.deb` to a GitHub Release.
 
 This installs the `zrecord` binary to `/usr/bin` and a desktop entry to `/usr/share/applications`, so it also appears in your application launcher.
 

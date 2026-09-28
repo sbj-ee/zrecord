@@ -7,6 +7,38 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-28
+
+A recording-reliability release. The meter shows what is actually
+recorded, and clipping and dropouts are detected and marked. Takes are
+recorded raw, with effects moved to per-track stacks applied on playback.
+Takes stream to disk as they are recorded, with autosave and crash
+recovery.
+
+### Behaviour changes (read before upgrading)
+
+- **Takes are recorded raw.** A take is exactly what the input delivers,
+  with only Input gain applied. Nothing else processes audio on the way in.
+- **The live Filters panel is gone, replaced by per-track FX stacks.** Its
+  effects now live in a non-destructive stack on each track (the track's
+  **FX** button). The stack is applied on playback and export and saved in
+  the project.
+- **Ctrl+R now bakes a whole track's effects** (Tracks > Apply Track
+  Effects). Processing only a selection is gone: to process part of a
+  track, split that part onto its own track first.
+- **Takes are streamed into the project folder** as they are recorded
+  (`<project>.zrproj/takes/`, or `~/.local/share/zrecord/recovery` for a
+  project that hasn't been saved yet). Autosave and crash recovery come
+  with this: after a crash, zrecord offers to restore the unsaved work,
+  including the take that was being recorded.
+- **Project files:** tracks now carry an `"effects"` list. Projects from
+  earlier versions open unchanged. Older versions of zrecord open 1.2.0
+  projects but ignore the effect stacks, and drop them if they save the
+  project.
+- **Very long takes:** a take file past 4 GiB (about 3 hours of 48 kHz
+  stereo) keeps growing, but its WAV header sizes stop at the 4 GiB
+  maximum. zrecord reads the whole file; other tools may stop at 4 GiB.
+
 ### Changed
 
 - **Recording keeps the raw input; effects moved to playback.** A take is
@@ -160,6 +192,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   quitting normally. Each running zrecord holds its own session, under
   `~/.local/share/zrecord/recovery`, with a lock file, so a second instance
   never offers a session that is still in use.
+- **`zrecord --version`** prints the version and exits, without needing a
+  display.
 - **A full disk stops the take without losing it.** If the take can't be
   written (the disk is full, or a write fails), recording stops there. The
   part written stays on disk and the part still in memory (up to 60 s)
@@ -453,7 +487,8 @@ makes editing safe.
 - Playback of the current recording, and export to WAV, FLAC, OGG Vorbis or MP3.
 - `.deb` packaging via CPack.
 
-[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/sbj-ee/zrecord/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/sbj-ee/zrecord/releases/tag/v1.2.0
 [1.1.1]: https://github.com/sbj-ee/zrecord/releases/tag/v1.1.1
 [1.1.0]: https://github.com/sbj-ee/zrecord/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sbj-ee/zrecord/releases/tag/v1.0.0

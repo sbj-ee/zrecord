@@ -14,6 +14,13 @@ target_link_libraries(test_gui PRIVATE zrecord_gui Qt6::Test)
 add_test(NAME test_gui COMMAND test_gui)
 set_tests_properties(test_gui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# `zrecord --version` prints exactly this build's version, with no display.
+string(REGEX REPLACE "([.+])" "\\\\\\1" zrecord_version_regex "${ZRECORD_VERSION}")
+add_test(NAME zrecord_version COMMAND zrecord --version)
+set_tests_properties(zrecord_version PROPERTIES
+    PASS_REGULAR_EXPRESSION "^zrecord ${zrecord_version_regex}\n$"
+    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=")
+
 # In sanitizer builds, make UBSan findings fail the test instead of just
 # printing (ASan already aborts). Harmless in ordinary builds.
 get_property(zrecord_tests DIRECTORY PROPERTY TESTS)
