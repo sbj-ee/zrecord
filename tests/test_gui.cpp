@@ -29,6 +29,8 @@
 #include <QListWidget>
 #include <QMenu>
 #include "PeakMeter.h"
+#include "Recovery.h"
+#include "TakeFile.h"
 #include "zrecord_version.h"
 
 using namespace zrecord;
@@ -111,6 +113,9 @@ private slots:
     void repaintDoesNotWaitForTheProjectMutex();
     void aboutShowsTheBuildVersion();
     void playheadKeysMoveThePlayhead();
+    void takesStreamToTheSessionAndTheJournalFollows();
+    void diskFullStopsTheTakeKeepsItAndSaysSo();
+    void saveAndCleanExitRemoveTheRecoveryData();
 
 private:
     Project project_;
@@ -123,6 +128,9 @@ void TestGui::initTestCase() {
     QStandardPaths::setTestModeEnabled(true);
     QVERIFY2(QSettings().fileName().contains(".qttest"), qPrintable(QSettings().fileName()));
     QSettings().clear();
+    // Recovery sessions go under ~/.qttest too; start from none.
+    QVERIFY(RecoverySession::defaultRoot().contains(".qttest"));
+    QDir(RecoverySession::defaultRoot()).removeRecursively();
 }
 
 void TestGui::init() {
@@ -1963,4 +1971,164 @@ void TestGui::exportIncludesTrackEffects() {
 }
 
 QTEST_MAIN(TestGui)
+namespace {
+std::vector<float> rampTake(int64_t frames, int channels) {
+    std::vector<float> v(static_cast<size_t>(frames * channels));
+    for (size_t i = 0; i < v.size(); ++i) v[i] = static_cast<float>(i % 1000) / 1000.0f - 0.5f;
+    return v;
+}
+} // namespace
+
+void TestGui::takesStreamToTheSessionAndTheJournalFollows() {
+    // An unsaved project's take streams into the recovery session; after
+    // Stop and after each edit the journal is brought up to date, so a
+    // crash (simulated) leaves a session that restores what was there.
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    auto window = std::make_unique<MainWindow>(std::move(engine));
+    RecoverySession* session = window->recoveryForTest();
+    QVERIFY(session->active());
+    QVERIFY(session->dir().startsWith(RecoverySession::defaultRoot()));
+    const Project& project = window->projectForTest();
+
+    findButton(*window, "●  RECORD")->click();
+    const QString takePath = QString::fromStdString(fake->takeFileStatus().path);
+    QCOMPARE(QFileInfo(takePath).absolutePath(), QDir(session->dir()).filePath("takes"));
+    QVERIFY(QFile::exists(QDir(session->dir()).filePath("recording.json"))); // a crash now brings the take back
+    const std::vector<float> take = rampTake(22050, 2);
+    fake->setCapturedBuffer(take);
+    findButton(*window, "■  STOP")->click();
+    QVERIFY(!QFile::exists(QDir(session->dir()).filePath("recording.json"))); // the journal has it now
+    std::vector<float> onDisk;
+    int channels = 0;
+    int rate = 0;
+    std::string error;
+    QVERIFY2(readTakeFile(takePath.toStdString(), onDisk, channels, rate, error), error.c_str());
+    QVERIFY(onDisk == take);
+    QVERIFY(QFile::exists(QDir(session->dir()).filePath("journal.json")));
+    // The journal refers to the take file instead of copying it.
+    QVERIFY(QDir(QDir(session->dir()).filePath("audio")).entryList(QDir::Files).isEmpty());
+
+    // An edit is journalled shortly after (debounced).
+    const int before = session->journalsWritten();
+    findAction(*window, "+Track")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(session->journalsWritten() > before, 3000);
+    QVERIFY(session->flushJournal());
+
+    const QString dir = session->dir();
+    window->abandonRecoveryForTest(); // the process "crashes" here
+    const size_t tracks = project.tracks.size();
+    window.reset();
+    QVERIFY(QDir(dir).exists()); // a crash leaves it behind
+
+    auto found = RecoverableSession::find(RecoverySession::defaultRoot());
+    QCOMPARE(found.size(), size_t(1));
+    Project restored;
+    QVERIFY2(found[0]->restore(restored, error), error.c_str());
+    QCOMPARE(restored.tracks.size(), tracks);
+    QCOMPARE(restored.tracks[0].clips.size(), size_t(1));
+    QVERIFY(restored.tracks[0].clips[0].samples == take);
+    found[0]->discard();
+    QVERIFY(!QDir(dir).exists());
+}
+
+void TestGui::diskFullStopsTheTakeKeepsItAndSaysSo() {
+    // The disk fills half-way through a take: recording stops by itself,
+    // the part on disk stays there, the part after it (still in memory)
+    // isn't lost, and a message says what happened.
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    MainWindow window(std::move(engine));
+    const Project& project = window.projectForTest();
+    findButton(window, "●  RECORD")->click();
+    const int channels = fake->lastRecordingChannels();
+    const int64_t frames = std::llround(project.sampleRate);
+    const std::vector<float> take = rampTake(frames, channels);
+    fake->setCapturedBuffer(take);
+    const QString takePath = QString::fromStdString(fake->takeFileStatus().path);
+    fake->failTakeWrite("No space left on device", frames / 2);
+    window.tickForTest();
+    QVERIFY(!fake->isRecording());
+    QVERIFY(findButton(window, "●  RECORD") != nullptr);
+
+    // All of it is in the project...
+    QCOMPARE(project.tracks[0].clips.size(), size_t(1));
+    const std::vector<float> clip = project.tracks[0].clips[0].samples.toVector();
+    if (channels == project.channels) {
+        QVERIFY(clip == take);
+    } else {
+        QCOMPARE(clip.size(), take.size() * 2);
+    }
+    // ...the part that was written is still on disk...
+    std::vector<float> onDisk;
+    int fileChannels = 0;
+    int rate = 0;
+    std::string error;
+    QVERIFY2(readTakeFile(takePath.toStdString(), onDisk, fileChannels, rate, error), error.c_str());
+    QCOMPARE(int64_t(onDisk.size()), (frames / 2) * channels);
+    QVERIFY(std::equal(onDisk.begin(), onDisk.end(), take.begin()));
+
+    // ...and you're told, in the status bar and in a message.
+    const QString status = window.statusTextForTest();
+    QVERIFY2(status.startsWith("Stopped") && status.contains("couldn't be written to disk (No space left on device)"),
+             qPrintable(status));
+    auto* box = window.findChild<QMessageBox*>("recordingStoppedMessage");
+    QVERIFY(box != nullptr);
+    QTRY_VERIFY(box->isVisible());
+    QCOMPARE(box->text(), QString("Recording stopped: the take could not be written to disk."));
+    QVERIFY2(box->informativeText().startsWith("0.5 s of the take was saved to its file, and the 0.5 s after that "
+                                               "was kept in memory; all of it is in the project."),
+             qPrintable(box->informativeText()));
+    QVERIFY(box->detailedText().contains("No space left on device"));
+    box->close();
+}
+
+void TestGui::saveAndCleanExitRemoveTheRecoveryData() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("song.zrproj");
+    auto engine = std::make_unique<FakeAudioEngine>();
+    FakeAudioEngine* fake = engine.get();
+    auto window = std::make_unique<MainWindow>(std::move(engine));
+    RecoverySession* session = window->recoveryForTest();
+    const QString sessionDir = session->dir();
+
+    findButton(*window, "●  RECORD")->click();
+    const QString firstTake = QString::fromStdString(fake->takeFileStatus().path);
+    fake->setCapturedBuffer(rampTake(1000, 2));
+    findButton(*window, "■  STOP")->click();
+    QVERIFY(QFile::exists(firstTake));
+    QVERIFY(QFile::exists(QDir(sessionDir).filePath("journal.json")));
+
+    // Saving: the project has the take now; the recovery data goes.
+    QString error;
+    QVERIFY2(window->saveProjectTo(path, &error), qPrintable(error));
+    QVERIFY(!QFile::exists(firstTake));
+    QVERIFY(!QFile::exists(QDir(sessionDir).filePath("journal.json")));
+    QVERIFY(RecoverableSession::find(RecoverySession::defaultRoot()).empty());
+
+    // A saved project's takes stream into its own folder.
+    findButton(*window, "●  RECORD")->click();
+    const QString secondTake = QString::fromStdString(fake->takeFileStatus().path);
+    QCOMPARE(QFileInfo(secondTake).absolutePath(), QDir(path).filePath("takes"));
+    fake->setCapturedBuffer(rampTake(1000, 2));
+    findButton(*window, "■  STOP")->click();
+    QVERIFY(QFile::exists(secondTake));
+    QVERIFY(window->recoveryForTest()->flushJournal());
+
+    // Quitting without saving it (a clean exit): that take and the whole
+    // session go; the saved project is as it was.
+    window->setUnsavedChangesPromptForTest([](const QString&) { return int(QMessageBox::Discard); });
+    QVERIFY(window->close());
+    QVERIFY(!QDir(sessionDir).exists());
+    QVERIFY(!QFile::exists(secondTake));
+    QVERIFY(!QDir(QDir(path).filePath("takes")).exists());
+    window.reset();
+    Project reloaded;
+    std::string message;
+    QVERIFY2(ProjectFile::load(reloaded, path.toStdString(), message), message.c_str());
+    QCOMPARE(reloaded.tracks[0].clips.size(), size_t(1));
+    QVERIFY(QDir(RecoverySession::defaultRoot()).entryList({"session-*"}, QDir::Dirs).isEmpty());
+}
+
 #include "test_gui.moc"

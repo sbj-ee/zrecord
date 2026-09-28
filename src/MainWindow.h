@@ -7,6 +7,7 @@
 #include "AudioEngineInterface.h"
 #include "AudioFileWriter.h"
 #include "Project.h"
+#include "ProjectFile.h"
 #include "TrackPanel.h"
 #include "VoiceChanger.h"
 
@@ -22,6 +23,8 @@ class QTimer;
 class QUndoStack;
 
 namespace zrecord {
+
+class RecoverySession;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -130,6 +133,14 @@ public:
     const Project* previewProjectForTest() const { return previewActive_ ? previewProject_.get() : nullptr; }
     void tickForTest() { onTick(); }
     const Project& projectForTest() const { return project_; }
+
+    // Crash recovery: this window's recovery session (autosave journal and
+    // take files), writing the journal now instead of after the debounce,
+    // and a simulated crash (the session is left behind, unlocked).
+    RecoverySession* recoveryForTest() { return recovery_.get(); }
+    bool writeJournalNowForTest();
+    void abandonRecoveryForTest();
+    QString statusTextForTest() const;
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -297,6 +308,21 @@ private:
     TrackPanel* trackPanel_ = nullptr;
 
     QTimer* timer_ = nullptr;
+
+    // Crash recovery. Every undoable edit and track-setting change journals
+    // the project (debounced); a periodic timer catches anything else.
+    void journalSoon();
+    void writeJournal();
+    void showJournalError();
+    // After save/open/new: the old recovery data goes, and the journal
+    // refers to the project's own files from here on.
+    void resetRecovery(const QString& projectPath, const ClipFileMap& files);
+    std::unique_ptr<RecoverySession> recovery_;
+    QTimer* journalTimer_ = nullptr;
+    QTimer* autosaveTimer_ = nullptr;
+    bool journalDirty_ = false;
+    QString shownJournalError_;
+    QString takePath_; // the take being recorded (empty: none)
 };
 
 } // namespace zrecord
