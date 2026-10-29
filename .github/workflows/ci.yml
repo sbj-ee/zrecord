@@ -92,7 +92,8 @@ jobs:
             qt6-base-dev \
             portaudio19-dev \
             libsndfile1-dev \
-            libsamplerate0-dev
+            libsamplerate0-dev \
+            libsodium-dev
 
       - name: Configure (ASan + UBSan)
         run: >
