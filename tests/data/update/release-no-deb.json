@@ -1,0 +1,12 @@
+{
+  "html_url": "https://github.com/sbj-ee/zrecord/releases/tag/v0.11.0",
+  "tag_name": "v0.11.0",
+  "name": "zrecord 0.11.0",
+  "draft": false,
+  "prerelease": false,
+  "body": "Source only.",
+  "assets": [
+    { "name": "SHA256SUMS", "size": 10, "browser_download_url": "@BASE@/download/v0.11.0/SHA256SUMS" },
+    { "name": "zrecord_0.11.0_arm64.deb", "size": 10, "browser_download_url": "@BASE@/download/v0.11.0/zrecord_0.11.0_arm64.deb" }
+  ]
+}

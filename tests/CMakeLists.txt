@@ -14,6 +14,20 @@ target_link_libraries(test_gui PRIVATE zrecord_gui Qt6::Test)
 add_test(NAME test_gui COMMAND test_gui)
 set_tests_properties(test_gui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Updater: version compare, release JSON, checksum, minisign (fixtures made
+# with the real minisign tool and a throwaway key) and the whole flow against
+# a mock GitHub on a local socket. No network, no apt, no sudo.
+foreach(test_name minisign_test update_test)
+    add_executable(${test_name} ${test_name}.cpp)
+    target_link_libraries(${test_name} PRIVATE zrecord_update Qt6::Test)
+    target_compile_definitions(${test_name} PRIVATE
+        ZRECORD_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data"
+        ZRECORD_EXPECTED_VERSION="${PROJECT_VERSION}")
+    add_test(NAME ${test_name} COMMAND ${test_name})
+    set_tests_properties(${test_name} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_STYLE_OVERRIDE=Fusion;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config-${test_name}")
+endforeach()
+
 # `zrecord --version` prints exactly this build's version, with no display.
 string(REGEX REPLACE "([.+])" "\\\\\\1" zrecord_version_regex "${ZRECORD_VERSION}")
 add_test(NAME zrecord_version COMMAND zrecord --version)

@@ -28,6 +28,8 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSettings>
+
+#include "UpdateManager.hpp"
 #include <QSlider>
 #include <QTimer>
 #include <QToolBar>
@@ -727,6 +729,21 @@ void MainWindow::buildMenus() {
     viewMenu->addAction(zoomFitAction_);
 
     QMenu* helpMenu = menuBar()->addMenu("&Help");
+    // Same flow as zwriter: check GitHub releases, download, verify the
+    // minisign-signed SHA256SUMS, install with pkexec apt, offer a restart.
+    checkUpdatesAction_ = helpMenu->addAction("Check for &Updates…");
+    checkUpdatesAction_->setObjectName("checkUpdatesAction");
+    connect(checkUpdatesAction_, &QAction::triggered, this, [this] {
+        UpdateManager::instance().setHost(this);
+        UpdateManager::instance().checkNow(this);
+    });
+    checkUpdatesAtStartupAction_ = helpMenu->addAction("Check for Updates at &Startup");
+    checkUpdatesAtStartupAction_->setObjectName("checkUpdatesAtStartupAction");
+    checkUpdatesAtStartupAction_->setCheckable(true);
+    checkUpdatesAtStartupAction_->setChecked(UpdateManager::checkAtStartupEnabled());
+    connect(checkUpdatesAtStartupAction_, &QAction::toggled, this,
+            [](bool on) { UpdateManager::setCheckAtStartupEnabled(on); });
+    helpMenu->addSeparator();
     QAction* aboutAction = helpMenu->addAction("About zrecord");
     connect(aboutAction, &QAction::triggered, this, &MainWindow::onAbout);
 }

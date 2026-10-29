@@ -21,7 +21,8 @@ jobs:
             qt6-base-dev \
             portaudio19-dev \
             libsndfile1-dev \
-            libsamplerate0-dev
+            libsamplerate0-dev \
+            libsodium-dev
 
       # -Werror lives here rather than in CMakeLists.txt so local builds
       # against other Qt/PortAudio versions aren't blocked by warnings from

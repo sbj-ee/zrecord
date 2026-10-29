@@ -9,6 +9,7 @@
 #include "Project.h"
 #include "ProjectFile.h"
 #include "TrackPanel.h"
+#include "UpdateHost.hpp"
 #include "VoiceChanger.h"
 
 class QAction;
@@ -26,7 +27,7 @@ namespace zrecord {
 
 class RecoverySession;
 
-class MainWindow : public QMainWindow {
+class MainWindow : public QMainWindow, public UpdateHost {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
@@ -105,7 +106,13 @@ public:
     static QStringList recentProjects();
     bool openRecentProject(const QString& path);
     void setQuietRecentFailuresForTest(bool quiet) { quietRecentFailuresForTest_ = quiet; }
-    bool hasUnsavedChanges() const;
+    bool hasUnsavedChanges() const override;
+    // UpdateHost: zrecord reopens no project on restart (File > Open Recent
+    // has it), and closing goes through the usual save prompt.
+    QStringList restartArguments() const override { return {}; }
+    bool closeForRestart() override { return close(); }
+    QAction* checkUpdatesAction() const { return checkUpdatesAction_; }
+    QAction* checkUpdatesAtStartupAction() const { return checkUpdatesAtStartupAction_; }
 
     // What the "unsaved changes" question returns: Save, Discard or Cancel.
     // Tests replace the dialog with a function.
@@ -194,6 +201,8 @@ private:
     // the most recent one's, else home.
     QString lastProjectDir() const;
     static constexpr int kMaxRecentProjects = 8;
+    QAction* checkUpdatesAction_ = nullptr;
+    QAction* checkUpdatesAtStartupAction_ = nullptr;
     static constexpr const char* kRecentProjectsKey = "recentProjects";
     static constexpr const char* kGeometryKey = "mainWindow/geometry";
     static constexpr const char* kInputGainKey = "input/gainDb";
