@@ -1,0 +1,12 @@
+{
+  "html_url": "https://github.com/sbj-ee/zrecord/releases/tag/v1.0.0-rc.1",
+  "tag_name": "v1.0.0-rc.1",
+  "name": "zrecord 1.0.0 RC 1",
+  "draft": false,
+  "prerelease": true,
+  "body": "",
+  "assets": [
+    { "name": "zrecord_1.0.0-rc.1_amd64.deb", "size": 10, "browser_download_url": "@BASE@/download/rc/zrecord_1.0.0-rc.1_amd64.deb" },
+    { "name": "SHA256SUMS", "size": 10, "browser_download_url": "@BASE@/download/rc/SHA256SUMS" }
+  ]
+}

@@ -2,6 +2,7 @@
 #include <QTimer>
 
 #include "MainWindow.h"
+#include "UpdateManager.hpp"
 #include "zrecord_version.h"
 
 #include <cstdio>
@@ -25,6 +26,9 @@ int main(int argc, char** argv) {
 
     zrecord::MainWindow window;
     window.show();
+    // Help > Check for Updates at Startup (default on): at most once a day.
+    zrecord::UpdateManager::instance().setHost(&window);
+    zrecord::UpdateManager::instance().scheduleStartupCheck(&window);
     // Once the window is up: offer to restore work a crash left behind.
     QTimer::singleShot(0, &window, &zrecord::MainWindow::offerRecovery);
 

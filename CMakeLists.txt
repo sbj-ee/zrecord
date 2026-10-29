@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(zrecord LANGUAGES CXX VERSION 1.2.0)
+project(zrecord LANGUAGES CXX VERSION 1.3.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,12 +45,33 @@ endif()
 message(STATUS "zrecord version: ${ZRECORD_VERSION}")
 configure_file(cmake/zrecord_version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/zrecord_version.h" @ONLY)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network Test)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
 pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
 # Resampling imported audio to the project rate (Debian: libsamplerate0-dev).
 pkg_check_modules(SAMPLERATE REQUIRED IMPORTED_TARGET samplerate)
+# libsodium: Ed25519 + BLAKE2b to verify the minisign signature on a release's
+# SHA256SUMS before the in-app updater installs anything (src/Minisign.cpp).
+pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium>=1.0.18)
+
+# The in-app updater (Help > Check for Updates): check GitHub releases,
+# download, verify the minisign-signed SHA256SUMS, install with pkexec apt.
+# Ported from zwriter. No widgets in the logic, so it is unit-tested.
+add_library(zrecord_update STATIC
+    src/Minisign.cpp
+    src/Update.cpp
+    src/UpdateChecker.cpp
+    src/UpdateDialog.cpp
+    src/UpdateManager.cpp
+    src/UpdateSigningKey.cpp
+)
+target_include_directories(zrecord_update PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(zrecord_update PUBLIC Qt6::Widgets Qt6::Network PkgConfig::SODIUM)
+option(ZRECORD_DEV_OVERRIDES "Honour ZRECORD_UPDATE_URL (debug builds only)" OFF)
+if(ZRECORD_DEV_OVERRIDES)
+    target_compile_definitions(zrecord_update PUBLIC ZRECORD_DEV_OVERRIDES)
+endif()
 
 # Everything that isn't a widget lives in a library so the tests can link the
 # real code rather than a copy of it. The GUI classes (MainWindow, TrackPanel)
@@ -100,7 +121,7 @@ add_library(zrecord_gui STATIC
     src/RecoveryDialog.cpp
 )
 
-target_link_libraries(zrecord_gui PUBLIC zrecord_core)
+target_link_libraries(zrecord_gui PUBLIC zrecord_core zrecord_update)
 target_include_directories(zrecord_gui PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_executable(zrecord src/main.cpp)
@@ -147,6 +168,8 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Qt6 multi-track audio recorder/editor wit
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Stephen B. Johnson <stevebj.ee@gmail.com>")
 set(CPACK_DEBIAN_PACKAGE_SECTION "sound")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS YES)
+# Help > Check for Updates installs through pkexec apt.
+set(CPACK_DEBIAN_PACKAGE_SUGGESTS "pkexec")
 # The mic volume slider drives PipeWire/PulseAudio through pactl; without it
 # the slider does nothing (recording itself is unaffected).
 set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "pulseaudio-utils")

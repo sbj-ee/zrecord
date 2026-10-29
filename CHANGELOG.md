@@ -7,6 +7,20 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-29
+
+### Added
+
+- **Help > Check for Updates…** checks GitHub for a newer zrecord release,
+  shows its notes and offers Install / Skip This Version / Later. Install
+  downloads the .deb, `SHA256SUMS` and `SHA256SUMS.minisig`, verifies the
+  minisign signature against the public key built into zrecord and the
+  package's SHA-256, then installs it with `pkexec apt install` and offers to
+  restart. Same flow as zwriter.
+- **Help > Check for Updates at Startup** (on by default): a quiet check a
+  few seconds after launch, at most once a day.
+- Releases now publish a minisign-signed `SHA256SUMS` next to the .deb.
+
 ## [1.2.0] - 2026-09-28
 
 A recording-reliability release. The meter shows what is actually
